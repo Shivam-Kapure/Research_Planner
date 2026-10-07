@@ -1,0 +1,11 @@
+/* Minimal reset. Visual design is defined in the frontend phase. */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+}
