@@ -50,13 +50,39 @@ At least 4 distinct agents, clear responsibilities, planning/reasoning/tool use/
 
 ## Current Phase
 
-**Phase 7 complete: Runs API, persistence, and the first real end-to-end run.**
-- The Phase 6 graph now runs behind an authenticated Runs API, with persisted runs, agent outputs and traces.
-- One real free-tier run succeeded (`completed_with_limitations`) and its trace is exported unedited to `docs/traces/`.
-- No frontend or deployment yet.
-- Design: [docs/PHASE1_ARCHITECTURE.md](docs/PHASE1_ARCHITECTURE.md), [docs/PHASE6_MULTI_AGENT.md](docs/PHASE6_MULTI_AGENT.md), [docs/PHASE7_RUNS_API.md](docs/PHASE7_RUNS_API.md).
+**Phase 8 complete: the frontend.** A Next.js research product on top of the unchanged Phase 7 API. No backend files were changed and no dependencies were added.
 
-**Next:** Phase 8, the frontend. Visual inspiration is the editorial restraint of lujoliving.com: typography, whitespace, large sections and storytelling. That's for style only; no content, branding or assets are copied.
+**Next:** Phase 9, deployment (Vercel Hobby, Render Free, Neon Free).
+
+## Phase 8: What Was Added (`frontend/`)
+
+- **Pages:** landing (`/`), sign in and register (`(auth)`), and the authenticated workspace (`(app)`): new research (`/research`), history (`/runs`), run detail (`/runs/[runId]`, tabs Overview, Execution, Evidence, Review, Agent outputs), and settings (`/settings`). Also 404 and error pages.
+- **API layer:** `src/lib/api/` holds typed mirrors of the backend schemas, one `ApiClient` (same-origin `/api` proxy, cookie session, error kinds for 401/403/404/409/422/429/5xx/unreachable), and one function per endpoint. The session (`src/lib/session.tsx`) comes only from `GET /api/auth/me`. A 401 sends the user to sign in with an "expired" notice.
+- **Cold start:** when the backend is unreachable, the workspace shows a "waking the research engine" screen, probes `/api/readyz` every 3 s for up to 2 minutes and then offers a retry. It shows elapsed time only, never invented progress. The landing page sends one `/api/healthz` request to start waking the backend.
+- **Polling** (`src/lib/runs/poller.ts`): `GET /runs/{id}` then `GET /events?after=<last seq>` every 2 s (10 s while the tab is hidden), with exponential backoff on connection loss. Outputs are re-read only when a new `agent_completed` event references one. When the run is terminal, it fetches `/result` and `/outputs` once and stops; 401 and 404 stop it at once.
+- **Trace visualisation** (`src/lib/trace/timeline.ts`, `components/agents/`): steps, iterations, verdicts, routing, replanning (search or scope revision), limit stops and errors are derived only from recorded events (parent ids, `decision`/`replan` payloads). The path is never hard-coded. Each step expands to its tool calls, model calls, validations, fallbacks and raw event log.
+- **Results:** the run's status and evidence confidence sit at the top of the page, and limitations are listed there for `completed_with_limitations`. The review renders as an article through a small safe Markdown renderer (React elements only, no HTML injection), with `[Pn]` citations linking to the references. The Evidence tab shows each synthesis decision (coverage, themes, contradictions, override, replanning request). Agent outputs have a readable view per contract plus the raw JSON.
+- **Settings:** Groq and Gemini keys are shown masked (last four characters only) with their verification status. Keys are entered in a password field, sent once and cleared from state; removing a key needs an explicit confirmation. Keys are never stored in the browser.
+- **Design:** warm paper, ink and one oxblood accent, with Newsreader (serif), Instrument Sans and IBM Plex Mono self-hosted via `next/font`. Hairline rules, no gradients or AI imagery, status shown by text and icon as well as colour, visible focus, reduced-motion support, responsive down to 375 px. Visual inspiration only from lujoliving.com.
+- **Tests:** `npm test` (39 tests) uses Node's built-in `node:test` with `tsc` and `react-dom/server`, so no new dependency. It covers timeline derivation on the real exported trace and on synthetic scope-revision and failure paths, the poller (cursor, conditional outputs, terminal stop, paging, backoff, 404, hidden tab), the API client error mapping, Markdown safety, component rendering (adaptive timeline, limitations banner, review citations and references, empty history, status labels, key masking) and form validation. CI runs `npm test`.
+
+## Phase 8 Validation (actually run, 2026-10-08)
+
+- `npm run lint`, `npm run typecheck`, `npm run build` and `npm test` (39 passed). A mutation check (polling that ignores the `after` cursor) was caught by the paging test, which then never terminated. The planned replan and key-masking mutations were not run.
+- **Manual inspection** in a browser against the real local backend:
+  - landing, register (including a real backend 422), sign in (wrong password and empty fields), sign out
+  - empty history and no-provider states for a new account
+  - settings with masked verified keys and key validation
+  - the four Phase 7 runs: `completed_with_limitations`, two `partial`, and one `failed`
+  - one new real run started from the UI and watched live (cursor polling confirmed in the network log)
+  - mobile (375 px) with no horizontal overflow
+  - after the fixes, a clean console during normal navigation
+- **Not done:** Playwright smoke test (not installed; it would be a new dependency). The run page polls rather than streaming.
+
+**Known frontend limitations:**
+- The first workspace load shows a brief loading state while the session is checked. The sign-in pages do not probe the session, so a signed-in user who opens `/login` sees the form.
+- `RunSummary` has no evidence status, so the history list shows run status and stop reason only.
+- Times are shown in the browser's local time zone.
 
 ## Phase 7: What Was Added
 
@@ -375,6 +401,6 @@ Free tiers and free access only: Vercel Hobby, Render Free, Neon Free, free-tier
 5. ~~Tools: OpenAlex, Semantic Scholar, dedupe, PDF~~ (complete)
 6. ~~Agents, LangGraph orchestration and replanning~~ (complete)
 7. ~~Runs API, end-to-end tests and first real trace~~ (complete)
-8. Frontend
+8. ~~Frontend~~ (complete)
 9. Deployment
 10. Final documentation and demo

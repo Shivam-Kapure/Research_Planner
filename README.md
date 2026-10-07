@@ -4,7 +4,7 @@
 
 ResearchPilot turns a research question into a cited literature review. Five agents (Research Planner, Literature Search, Document Analysis, Evidence Synthesis, Review Writer) coordinate through a LangGraph state graph. The Evidence Synthesis Agent can send the run back for more research when the evidence is insufficient or contradictory, and the loop is bounded. Each run produces a real execution trace of the agent handoffs and decisions.
 
-> Status: **Phase 7 (Runs API + first real run)**. The backend has auth, encrypted user keys, the five-agent LangGraph workflow with adaptive replanning, a Runs API with persisted runs, agent outputs and traces, and a first real free-tier run (exported in [docs/traces/](docs/traces/)). The frontend is Phase 8.
+> Status: **Phase 8 (frontend)**. The Next.js frontend covers sign-in, the research workspace, live agent timelines, reviews and settings (see PROJECT_STATE.md). The backend has auth, encrypted user keys, the five-agent LangGraph workflow with adaptive replanning, a Runs API with persisted runs, agent outputs and traces, and a first real free-tier run (exported in [docs/traces/](docs/traces/)). The frontend is Phase 8.
 
 ## Stack
 
@@ -139,5 +139,5 @@ cd backend && uv run pytest tests/test_tools_literature_clients.py tests/test_to
 
 ```bash
 cd backend && uv run ruff check . && uv run ruff format --check . && uv run mypy app tests migrations && uv run pytest
-cd frontend && npm run lint && npm run typecheck && npm run build
+cd frontend && npm run lint && npm run typecheck && npm run build && npm test
 ```
