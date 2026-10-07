@@ -12,7 +12,7 @@ from sqlalchemy.exc import DBAPIError
 
 from app.llm.gateway import AttemptRecord
 from app.services.trace_recorder import TraceRecorder
-from tests.conftest import COOKIE_NAME, make_client, register_and_login, scalar
+from tests.conftest import COOKIE_NAME, create_run, make_client, register_and_login, scalar
 from tests.llm_fakes import GEMINI_TEST_KEY, GROQ_TEST_KEY
 
 pytestmark = pytest.mark.anyio
@@ -23,10 +23,11 @@ async def _user(client: AsyncClient, email: str = "alice@example.com") -> uuid.U
     return uuid.UUID((await client.get("/api/auth/me")).json()["id"])
 
 
-def _recorder(app: FastAPI, user_id: uuid.UUID, run_id: uuid.UUID | None = None) -> TraceRecorder:
-    return TraceRecorder(
-        app.state.database.sessionmaker, run_id=run_id or uuid.uuid4(), user_id=user_id
-    )
+async def _recorder(
+    app: FastAPI, user_id: uuid.UUID, run_id: uuid.UUID | None = None
+) -> TraceRecorder:
+    run = await create_run(app, user_id, run_id)
+    return TraceRecorder(app.state.database.sessionmaker, run_id=run, user_id=user_id)
 
 
 async def _rows(app: FastAPI, run_id: uuid.UUID) -> list[dict[str, Any]]:
@@ -44,7 +45,7 @@ async def _rows(app: FastAPI, run_id: uuid.UUID) -> list[dict[str, Any]]:
 async def test_events_are_appended_with_gap_free_sequence(
     client: AsyncClient, app: FastAPI
 ) -> None:
-    rec = _recorder(app, await _user(client))
+    rec = await _recorder(app, await _user(client))
     started = await rec.agent_started("planner", iteration=1, message="planning")
     await rec.llm_call(
         "planner",
@@ -94,7 +95,7 @@ async def test_events_are_appended_with_gap_free_sequence(
 async def test_concurrent_appends_get_unique_ordered_sequence(
     client: AsyncClient, app: FastAPI
 ) -> None:
-    rec = _recorder(app, await _user(client))
+    rec = await _recorder(app, await _user(client))
     results = await asyncio.gather(
         *(rec.agent_started("analysis", iteration=1, message=f"paper {i}") for i in range(20))
     )
@@ -107,11 +108,11 @@ async def test_runs_have_independent_sequences_and_reopen_continues(
 ) -> None:
     user_id = await _user(client)
     run_a, run_b = uuid.uuid4(), uuid.uuid4()
-    await _recorder(app, user_id, run_a).agent_started("planner", iteration=1, message="a")
+    await (await _recorder(app, user_id, run_a)).agent_started("planner", iteration=1, message="a")
     # A new recorder for the same run (e.g. after a restart) continues the sequence.
     rec_a = await TraceRecorder.open(app.state.database.sessionmaker, run_id=run_a, user_id=user_id)
     assert (await rec_a.agent_started("search", iteration=1, message="a2")).seq == 2
-    rec_b = _recorder(app, user_id, run_b)
+    rec_b = await _recorder(app, user_id, run_b)
     assert (await rec_b.agent_started("planner", iteration=1, message="b")).seq == 1
 
 
@@ -135,7 +136,7 @@ async def test_runs_have_independent_sequences_and_reopen_continues(
 async def test_invalid_events_are_rejected_and_not_persisted(
     client: AsyncClient, app: FastAPI, event: dict[str, object]
 ) -> None:
-    rec = _recorder(app, await _user(client))
+    rec = await _recorder(app, await _user(client))
     with pytest.raises(ValidationError):
         await rec.record(event)
     assert await _rows(app, rec.run_id) == []
@@ -145,7 +146,7 @@ async def test_invalid_events_are_rejected_and_not_persisted(
 
 
 async def test_database_rejects_update_and_direct_delete(client: AsyncClient, app: FastAPI) -> None:
-    rec = _recorder(app, await _user(client))
+    rec = await _recorder(app, await _user(client))
     await rec.agent_started("planner", iteration=1, message="original")
 
     for statement in (
@@ -162,7 +163,7 @@ async def test_database_rejects_update_and_direct_delete(client: AsyncClient, ap
 
 async def test_deleting_the_user_cascades_to_their_trace(client: AsyncClient, app: FastAPI) -> None:
     user_id = await _user(client)
-    rec = _recorder(app, user_id)
+    rec = await _recorder(app, user_id)
     parent = await rec.agent_started("planner", iteration=1, message="p")
     await rec.agent_completed("planner", iteration=1, message="c", parent_id=parent.id)
     async with app.state.database.engine.begin() as conn:
@@ -192,7 +193,7 @@ async def test_secrets_never_reach_trace_rows(client: AsyncClient, app: FastAPI)
         "db-password-123",
     ]
 
-    rec = _recorder(app, user_id)
+    rec = await _recorder(app, user_id)
     await rec.tool_call(
         "search",
         iteration=1,
@@ -243,7 +244,7 @@ async def test_secrets_never_reach_trace_rows(client: AsyncClient, app: FastAPI)
 
 
 async def test_trace_payloads_are_size_bounded(client: AsyncClient, app: FastAPI) -> None:
-    rec = _recorder(app, await _user(client))
+    rec = await _recorder(app, await _user(client))
     await rec.validation(
         "analysis",
         iteration=1,
@@ -269,7 +270,7 @@ async def test_trace_payloads_are_size_bounded(client: AsyncClient, app: FastAPI
 
 
 async def test_owner_reads_events_in_order_with_cursor(client: AsyncClient, app: FastAPI) -> None:
-    rec = _recorder(app, await _user(client))
+    rec = await _recorder(app, await _user(client))
     for i in range(5):
         await rec.agent_started("planner", iteration=1, message=f"step {i}")
 
@@ -285,7 +286,7 @@ async def test_owner_reads_events_in_order_with_cursor(client: AsyncClient, app:
 
 async def test_trace_read_is_owner_only(app: FastAPI) -> None:
     async with make_client(app) as alice, make_client(app) as bob, make_client(app) as anon:
-        rec = _recorder(app, await _user(alice, "alice@example.com"))
+        rec = await _recorder(app, await _user(alice, "alice@example.com"))
         await rec.agent_started("planner", iteration=1, message="private")
         await _user(bob, "bob@example.com")
 

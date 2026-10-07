@@ -330,3 +330,19 @@ async def test_key_is_fetched_per_request_and_never_retained_or_logged(
     assert secret not in state
     assert caplog.records  # HTTP client logging was captured
     assert secret not in caplog.text
+
+
+async def test_groq_reasoning_effort_is_sent_only_when_configured() -> None:
+    plain, tuned = Recorder(json_response(200, GROQ_OK)), Recorder(json_response(200, GROQ_OK))
+    await groq(plain).generate(REQUEST)
+    await GroqProvider(
+        tuned.client(), CountingKeySource(GROQ_TEST_KEY), reasoning_effort="low"
+    ).generate(REQUEST)
+    assert "reasoning_effort" not in plain.body()
+    assert tuned.body()["reasoning_effort"] == "low"
+
+
+async def test_gemini_thinking_level_takes_precedence_over_budget() -> None:
+    recorder = Recorder(json_response(200, GEMINI_OK))
+    await gemini(recorder, thinking_budget=0, thinking_level="low").generate(REQUEST)
+    assert recorder.body()["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "low"}

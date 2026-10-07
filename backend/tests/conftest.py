@@ -1,3 +1,4 @@
+import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -78,6 +79,7 @@ def settings(migrated_database: str, encryption_key: str) -> Settings:
         credential_encryption_keys=encryption_key,
         frontend_origin=FRONTEND_ORIGIN,
         session_cookie_secure=True,
+        validate_credentials_on_save=False,  # no provider network calls in tests
     )
 
 
@@ -85,7 +87,10 @@ async def _truncate(app: FastAPI) -> None:
     async with app.state.database.engine.begin() as conn:
         # TRUNCATE fires no row triggers, so the append-only trace guard does not block it.
         await conn.execute(
-            text("TRUNCATE users, sessions, user_provider_credentials, trace_events CASCADE")
+            text(
+                "TRUNCATE users, sessions, user_provider_credentials, runs, agent_outputs, "
+                "trace_events CASCADE"
+            )
         )
 
 
@@ -94,7 +99,9 @@ async def app(settings: Settings) -> AsyncIterator[FastAPI]:
     application = create_app(settings)
     await _truncate(application)
     yield application
+    await application.state.run_executor.shutdown()
     await _truncate(application)
+    await application.state.http_client.aclose()
     await application.state.database.dispose()
 
 
@@ -125,3 +132,20 @@ async def execute(app: FastAPI, sql: str, **params: object) -> None:
 async def scalar(app: FastAPI, sql: str, **params: object) -> object:
     async with app.state.database.engine.connect() as conn:
         return (await conn.execute(text(sql), params)).scalar()
+
+
+async def create_run(
+    app: FastAPI, user_id: object, run_id: object | None = None, status: str = "running"
+) -> uuid.UUID:
+    """Insert a runs row directly (for tests of components below the Runs API)."""
+    new_id = run_id or uuid.uuid4()
+    await execute(
+        app,
+        "INSERT INTO runs (id, user_id, question, request, status) "
+        "VALUES (:id, :u, 'test question for a run', CAST(:req AS jsonb), :status)",
+        id=new_id,
+        u=user_id,
+        req='{"question": "test question for a run", "max_iterations": 3}',
+        status=status,
+    )
+    return new_id  # type: ignore[return-value]

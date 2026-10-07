@@ -44,7 +44,10 @@ class Settings(BaseSettings):
     gemini_requests_per_minute: int = Field(default=8, ge=1, le=1000)
     llm_request_timeout_s: float = Field(default=60.0, gt=0, le=300)
     # Optional Gemini thinking budget (thinking tokens count against maxOutputTokens).
-    gemini_thinking_budget: int | None = Field(default=None, ge=0, le=32768)
+    gemini_thinking_budget: int | None = Field(default=None, ge=0, le=32768)  # Gemini 2.5
+    gemini_thinking_level: Literal["minimal", "low", "medium", "high"] | None = None  # Gemini 3.x
+    # Groq reasoning models (openai/gpt-oss-*) only; leave unset for other Groq models.
+    groq_reasoning_effort: Literal["low", "medium", "high"] | None = None
 
     # Academic sources (free). All optional: both APIs work without credentials at lower
     # limits. OPENALEX_API_KEY and SEMANTIC_SCHOLAR_API_KEY are free keys, never paid plans.
@@ -54,8 +57,20 @@ class Settings(BaseSettings):
     semantic_scholar_requests_per_minute: int = Field(default=30, ge=1, le=600)
     literature_timeout_s: float = Field(default=20.0, gt=0, le=120)
 
+    # Runs. In-process asyncio execution (architecture §2): bounded concurrency for Render Free;
+    # queued runs wait in memory and do not survive a process restart.
+    max_concurrent_runs: int = Field(default=1, ge=1, le=4)
+    # Check a provider key with one cheap model-list call when it is saved.
+    validate_credentials_on_save: bool = True
+
     @field_validator(
-        "openalex_email", "openalex_api_key", "semantic_scholar_api_key", mode="before"
+        "openalex_email",
+        "openalex_api_key",
+        "semantic_scholar_api_key",
+        "gemini_thinking_budget",
+        "gemini_thinking_level",
+        "groq_reasoning_effort",
+        mode="before",
     )
     @classmethod
     def _blank_is_unset(cls, value: object) -> object:

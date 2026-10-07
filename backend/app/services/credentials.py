@@ -43,6 +43,11 @@ class CredentialService:
     async def list(self, user_id: uuid.UUID) -> list[ProviderCredential]:
         return await self._repo.list_for_user(user_id)
 
+    async def set_status(
+        self, user_id: uuid.UUID, provider: str, status: str
+    ) -> ProviderCredential | None:
+        return await self._repo.set_status(user_id, provider, status)
+
     async def delete(self, user_id: uuid.UUID, provider: str) -> bool:
         return await self._repo.delete(user_id, provider)
 

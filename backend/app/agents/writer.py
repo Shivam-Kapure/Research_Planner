@@ -6,12 +6,12 @@ evidence_status follows the validated decision, and limitations always state why
 stopped when it was not sufficient.
 """
 
-import re
 import uuid
 
 from pydantic import Field, ValidationError
 
 from app.agents.base import Agent, as_json
+from app.llm.structured import summarize_validation_error
 from app.llm.types import Message
 from app.orchestration.routing import StopReason
 from app.schemas.contracts import (
@@ -40,16 +40,23 @@ abstract-only evidence, iteration or budget limits).
 - If no papers are available, write only an introduction and a conclusion explaining that no \
 usable evidence was found."""
 
-CITATION_RETRY = """These citation keys do not exist: {keys}. Use only: {allowed}. Body \
-sections must cite at least one existing key."""
-
-_UNKNOWN_CITATION = re.compile(r"\[@([A-Za-z0-9_:\-]{1,64})\]")
+REVIEW_RETRY = """The review was rejected: {problem}. Fix only that: every "body" section must \
+cite at least one paper inline as [@KEY], using only these keys: {allowed}. Sections that cite \
+nothing must be "introduction" or "conclusion". Return the full corrected review."""
 
 
 class SectionDraft(Strict):
     heading: ShortText
     kind: str = Field(pattern=r"^(introduction|body|conclusion)$")
-    body_markdown: str = Field(min_length=1, max_length=12000)
+    # The rule is repeated in the schema itself: models follow schema descriptions closely.
+    body_markdown: str = Field(
+        min_length=1,
+        max_length=12000,
+        description=(
+            "Markdown text. In a 'body' section every factual claim must be followed by an inline "
+            "citation of a paper key from the input, written exactly like [@P1] or [@P2][@P3]."
+        ),
+    )
 
 
 class ReviewDraft(Strict):
@@ -120,22 +127,25 @@ class ReviewWriterAgent(Agent):
                     raise ValueError(f"unknown citation keys {unknown}")
                 review = _assemble(draft, keys, papers, status, system_limits)
             except (ValueError, ValidationError) as exc:
+                # Feed back the actual problem (field and message only, never the draft text).
+                problem = (
+                    summarize_validation_error(exc)
+                    if isinstance(exc, ValidationError)
+                    else str(exc)
+                )[:300]
                 await self.rt.recorder.validation(
                     "writer",
                     iteration=iteration,
                     schema_name="final_review",
                     passed=False,
-                    errors=[str(exc)[:300]],
+                    errors=[problem],
                     parent_id=parent_id,
                 )
                 if attempt == 1:
                     raise
                 messages += [
                     Message("assistant", draft.model_dump_json()),
-                    Message(
-                        "user",
-                        CITATION_RETRY.format(keys=unknown or "none", allowed=sorted(allowed)),
-                    ),
+                    Message("user", REVIEW_RETRY.format(problem=problem, allowed=sorted(allowed))),
                 ]
                 continue
             await self.rt.recorder.validation(
@@ -180,7 +190,9 @@ def _system_limitations(
         )
     elif stop_reason == "budget_limit":
         notes.append("Research stopped early to stay within the free-tier LLM budget.")
-    if decision:
+    if decision is None:
+        notes.append("No evidence synthesis was completed for this review.")
+    else:
         for c in decision.coverage:
             if c.status != "covered":
                 notes.append(

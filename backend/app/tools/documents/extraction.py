@@ -2,6 +2,7 @@
 
 import asyncio
 import io
+import logging
 from dataclasses import dataclass, field
 
 from anyio import to_thread
@@ -9,6 +10,10 @@ from pypdf import PasswordType, PdfReader
 
 from app.tools.documents.models import PageText
 from app.tools.errors import InvalidPdf, PdfExtractionFailed, ToolError
+
+# pypdf warns verbosely about quirks of real-world PDFs (fonts, xref repairs); those are
+# not actionable and would flood the host's logs. Errors still surface as exceptions.
+logging.getLogger("pypdf").setLevel(logging.ERROR)
 
 
 @dataclass(frozen=True)

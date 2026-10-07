@@ -37,7 +37,10 @@ async def build_gateway_for_user(
     providers: dict[ProviderName, LLMProvider] = {}
     if "groq" in keys:
         providers["groq"] = GroqProvider(
-            http_client, keys["groq"].reveal, timeout_s=settings.llm_request_timeout_s
+            http_client,
+            keys["groq"].reveal,
+            timeout_s=settings.llm_request_timeout_s,
+            reasoning_effort=settings.groq_reasoning_effort,
         )
     if "gemini" in keys:
         providers["gemini"] = GeminiProvider(
@@ -45,6 +48,7 @@ async def build_gateway_for_user(
             keys["gemini"].reveal,
             timeout_s=settings.llm_request_timeout_s,
             thinking_budget=settings.gemini_thinking_budget,
+            thinking_level=settings.gemini_thinking_level,
         )
     return LLMGateway(
         providers,

@@ -8,7 +8,7 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel
 
-from app.llm.errors import LLMError, NoProviderConfigured
+from app.llm.errors import LLMError, NoProviderConfigured, ProviderAuthError
 from app.llm.gateway import AttemptRecord
 from app.llm.types import Message
 from app.orchestration.runtime import ResearchRuntime
@@ -58,6 +58,8 @@ class Agent:
                 raise
             except LLMError as exc:
                 await self._trace_attempts(exc.attempts, iteration, parent_id)
+                if isinstance(exc, ProviderAuthError) and self.rt.sink:
+                    await self.rt.sink.credential_rejected(choice.provider)
                 if index == len(candidates) - 1:
                     raise
                 following = candidates[index + 1]

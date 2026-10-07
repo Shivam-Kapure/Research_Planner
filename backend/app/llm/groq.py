@@ -31,11 +31,15 @@ class GroqProvider:
         *,
         base_url: str = GROQ_BASE_URL,
         timeout_s: float = 60.0,
+        reasoning_effort: str | None = None,
     ) -> None:
         self._client = client
         self._key_source = key_source
         self._base_url = base_url.rstrip("/")
         self._timeout_s = timeout_s
+        # For reasoning models (e.g. openai/gpt-oss-*): reasoning tokens count against
+        # max_completion_tokens, so a lower effort leaves room for the JSON answer.
+        self._reasoning_effort = reasoning_effort
 
     @property
     def name(self) -> ProviderName:
@@ -50,6 +54,8 @@ class GroqProvider:
         }
         if request.json_mode:
             body["response_format"] = {"type": "json_object"}
+        if self._reasoning_effort:
+            body["reasoning_effort"] = self._reasoning_effort
 
         api_key = self._key_source()  # plaintext lives only in this call frame
         started = time.perf_counter()

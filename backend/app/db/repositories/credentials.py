@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -42,6 +42,18 @@ class CredentialRepository:
             await self._session.scalars(stmt, execution_options={"populate_existing": True})
         ).one()
         return credential
+
+    async def set_status(
+        self, user_id: uuid.UUID, provider: str, status: str
+    ) -> ProviderCredential | None:
+        result = await self._session.scalars(
+            update(ProviderCredential)
+            .where(ProviderCredential.user_id == user_id, ProviderCredential.provider == provider)
+            .values(status=status, validated_at=func.now(), updated_at=func.now())
+            .returning(ProviderCredential),
+            execution_options={"populate_existing": True},
+        )
+        return result.one_or_none()
 
     async def delete(self, user_id: uuid.UUID, provider: str) -> bool:
         result = await self._session.execute(

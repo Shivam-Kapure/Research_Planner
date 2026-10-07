@@ -17,6 +17,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from langgraph.graph import END, START, StateGraph
+from pydantic import ValidationError
 
 from app.agents.analysis import DocumentAnalysisAgent
 from app.agents.planner import PlannerAgent
@@ -24,9 +25,11 @@ from app.agents.search import LiteratureSearchAgent
 from app.agents.synthesis import EvidenceSynthesisAgent
 from app.agents.writer import ReviewWriterAgent
 from app.llm.errors import LLMError
+from app.llm.structured import summarize_validation_error
 from app.orchestration.routing import route_after_replanning, route_after_synthesis
 from app.orchestration.runtime import ResearchRuntime
 from app.orchestration.state import AgentFailure, ResearchState
+from app.schemas.contracts import Contract
 from app.schemas.trace import TraceAgent
 from app.tools.errors import ToolError
 
@@ -40,6 +43,28 @@ NODE_AGENT: dict[str, TraceAgent] = {
     "replanning": "orchestrator",
     "review_writer": "writer",
 }
+
+
+# State keys whose values are agent contracts to persist (each produced once, by one node).
+_OUTPUT_KEYS = (
+    "plan_history",
+    "search_request",
+    "search_history",
+    "analysis_history",
+    "synthesis_history",
+    "replanning_request",
+    "final_review",
+)
+
+
+def _contracts_in(update: dict[str, Any]) -> list[Contract]:
+    found: list[Contract] = []
+    for key in _OUTPUT_KEYS:
+        value = update.get(key)
+        for item in value if isinstance(value, list) else [value]:
+            if isinstance(item, Contract):
+                found.append(item)
+    return found
 
 
 class AgentNodeError(Exception):
@@ -67,6 +92,8 @@ def build_research_graph(rt: ResearchRuntime) -> Any:
         update, the next node and a one-line summary."""
         agent = NODE_AGENT[node]
         iteration = state.get("iteration", 1)
+        if rt.sink:
+            await rt.sink.progress(iteration, rt.budget)
         started = await recorder.agent_started(
             agent, iteration=iteration, message=f"{node} started (iteration {iteration})"
         )
@@ -74,7 +101,11 @@ def build_research_graph(rt: ResearchRuntime) -> Any:
             update, next_node, summary = await work(started.id)
         except (LLMError, ToolError, ValueError) as exc:
             code = getattr(exc, "code", type(exc).__name__)
-            message = getattr(exc, "message", str(exc))[:500]
+            message = (
+                summarize_validation_error(exc)
+                if isinstance(exc, ValidationError)  # never echo model output into errors
+                else getattr(exc, "message", str(exc))
+            )[:500]
             await recorder.error(
                 agent,
                 iteration=iteration,
@@ -93,11 +124,17 @@ def build_research_graph(rt: ResearchRuntime) -> Any:
             raise AgentNodeError(
                 AgentFailure(node=node, code=code, message=message, iteration=iteration, fatal=True)
             ) from None
+        done_iteration = update.get("iteration", iteration)  # replanning starts the next one
+        output_ids = []
+        if rt.sink:  # persist the agent's contracts now, not at the end of the run
+            for output in _contracts_in(update):
+                output_ids.append(await rt.sink.save_output(agent, done_iteration, output))
         await recorder.agent_completed(
             agent,
-            iteration=update.get("iteration", iteration),  # replanning starts the next iteration
+            iteration=done_iteration,
             message=f"{node}: {summary}",
             parent_id=started.id,
+            output_ref=output_ids[0] if output_ids else None,
         )
         await recorder.decision(
             agent,

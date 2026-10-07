@@ -36,12 +36,14 @@ class GeminiProvider:
         base_url: str = GEMINI_BASE_URL,
         timeout_s: float = 60.0,
         thinking_budget: int | None = None,
+        thinking_level: str | None = None,
     ) -> None:
         self._client = client
         self._key_source = key_source
         self._base_url = base_url.rstrip("/")
         self._timeout_s = timeout_s
         self._thinking_budget = thinking_budget
+        self._thinking_level = thinking_level
 
     @property
     def name(self) -> ProviderName:
@@ -58,7 +60,9 @@ class GeminiProvider:
         }
         if request.json_mode:
             config["responseMimeType"] = "application/json"
-        if self._thinking_budget is not None:
+        if self._thinking_level:  # Gemini 3.x
+            config["thinkingConfig"] = {"thinkingLevel": self._thinking_level}
+        elif self._thinking_budget is not None:  # Gemini 2.5
             config["thinkingConfig"] = {"thinkingBudget": self._thinking_budget}
         body: dict[str, Any] = {
             "contents": [

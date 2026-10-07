@@ -4,7 +4,7 @@
 
 ResearchPilot turns a research question into a cited literature review. Five agents (Research Planner, Literature Search, Document Analysis, Evidence Synthesis, Review Writer) coordinate through a LangGraph state graph. The Evidence Synthesis Agent can send the run back for more research when the evidence is insufficient or contradictory, and the loop is bounded. Each run produces a real execution trace of the agent handoffs and decisions.
 
-> Status: **Phase 6 (five agents + LangGraph adaptive loop)**. The backend has auth, encrypted user keys, versioned inter-agent contracts, a Groq/Gemini provider layer, an append-only execution trace, literature and open-access PDF tools, and the five-agent LangGraph workflow with deterministic sufficiency validation and bounded replanning. There is no Runs API or frontend yet. See [PROJECT_STATE.md](PROJECT_STATE.md) and [docs/PHASE1_ARCHITECTURE.md](docs/PHASE1_ARCHITECTURE.md).
+> Status: **Phase 7 (Runs API + first real run)**. The backend has auth, encrypted user keys, the five-agent LangGraph workflow with adaptive replanning, a Runs API with persisted runs, agent outputs and traces, and a first real free-tier run (exported in [docs/traces/](docs/traces/)). The frontend is Phase 8.
 
 ## Stack
 
@@ -71,13 +71,17 @@ Remove the local database and its data with `docker compose down -v`.
 | `GET /healthz`, `GET /readyz` (also under `/api`) | Liveness check; readiness check, which includes a PostgreSQL query |
 | `POST /api/auth/register`, `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me` | Email/password auth with an httpOnly session cookie |
 | `GET /api/credentials`, `PUT /api/credentials/{groq,gemini}`, `DELETE /api/credentials/{provider}` | Encrypted provider API keys. Only metadata is returned, never the key |
-| `GET /api/runs/{run_id}/events?after=&limit=` | The owner's execution-trace events in sequence order (polling cursor) |
+| `POST /api/runs`, `GET /api/runs`, `GET /api/runs/{id}`, `POST /api/runs/{id}/cancel` | Create (202, runs in the background), list, poll and cancel research runs |
+| `GET /api/runs/{id}/events?after=&limit=`, `/outputs`, `/result` | Append-only trace (polling cursor), persisted agent outputs, final review |
+
+Details and lifecycle: [docs/PHASE7_RUNS_API.md](docs/PHASE7_RUNS_API.md).
 
 ## LLM providers
 
 - **Providers:** Groq and Gemini, called through their REST APIs (`app/llm/groq.py`, `app/llm/gemini.py`) behind one provider-neutral interface, `LLMGateway`. Free-tier keys are enough: the app never asks users to enable billing. It works with Groq only, Gemini only, or both.
 - **Keys:** each user adds their own key with `PUT /api/credentials/{provider}`, and it is stored encrypted. The gateway decrypts it per request through the Phase 3 credential service. Keys never appear in environment variables, contracts, traces, logs or responses.
-- **Models:** model IDs are configuration (`GROQ_MODELS`, `GEMINI_MODELS`, comma-separated candidates in order of preference). Nothing is hard-coded. List only models the provider currently offers on its free tier.
+- **Models:** model IDs are configuration (`GROQ_MODELS`, `GEMINI_MODELS`, comma-separated candidates in order of preference). Nothing is hard-coded. List only models the provider currently offers on its free tier. The values that worked in the first live run, and why, are in [docs/PHASE7_RUNS_API.md](docs/PHASE7_RUNS_API.md#model-configuration-free-tiers).
+- **Reasoning budgets:** `GEMINI_THINKING_LEVEL` (Gemini 3.x) and `GROQ_REASONING_EFFORT` (gpt-oss) keep reasoning tokens from crowding out the JSON answer.
 - **Rate limits:** `GROQ_REQUESTS_PER_MINUTE` / `GEMINI_REQUESTS_PER_MINUTE` pace calls to stay within free-tier limits. `LLM_REQUEST_TIMEOUT_S` sets the request timeout, and `GEMINI_THINKING_BUDGET` is optional.
 - **Structured output:** the gateway requests JSON, validates it against a Pydantic contract, and allows at most one repair round. Transient failures are retried at most twice, so one call never makes more than 6 provider requests.
 

@@ -471,3 +471,59 @@ async def test_writer_retries_once_on_invented_citations(app: FastAPI) -> None:
             stop_reason=None,
         )
     assert llm.calls == ["ReviewDraft", "ReviewDraft"]
+
+
+async def test_writer_retry_feeds_back_the_real_problem(app: FastAPI) -> None:
+    """Regression from the first live run: an uncited body section must be fixed on retry."""
+    seen: list[LLMRequest] = []
+    uncited = json.dumps(
+        {
+            "title": "T",
+            "abstract": "A",
+            "sections": [
+                {"heading": "Effects", "kind": "body", "body_markdown": "Blood pressure fell."}
+            ],
+        }
+    )
+    fixed = json.dumps(
+        {
+            "title": "T",
+            "abstract": "A",
+            "sections": [
+                {
+                    "heading": "Effects",
+                    "kind": "body",
+                    "body_markdown": "Blood pressure fell [@P1].",
+                }
+            ],
+        }
+    )
+
+    def reply(request: LLMRequest) -> str:
+        seen.append(request)
+        return uncited if len(seen) == 1 else fixed
+
+    rt, _ = await make_runtime(app, ScriptedLLM(scripts([], ReviewDraft=[reply])), lambda q: [])
+    paper = make_paper("W1", "Paper")
+    analyses = [
+        DocumentAnalysis(
+            paper_id=paper.paper_id,
+            basis="full_text",
+            extraction_status="succeeded",
+            evidence=[evidence(paper.paper_id, "sq-1")],
+        )
+    ]
+    review = await ReviewWriterAgent(rt).run(
+        REQUEST, PLAN, None, analyses, {str(paper.paper_id): paper}, iteration=1, stop_reason=None
+    )
+    assert [r.citation_key for r in review.references] == ["P1"]
+    feedback = seen[1].messages[-1].content
+    assert "must cite at least one paper" in feedback and "P1" in feedback
+
+
+def test_grounding_folds_typographic_hyphens_and_spaces() -> None:
+    """Regression from the live run: real PDFs use U+2011 (non-breaking hyphen) in '24‑h'."""
+    from app.agents.analysis import _norm
+
+    assert _norm("24‑h ambulatory blood pressure") == _norm("24-h ambulatory blood pressure")
+    assert _norm("“Systolic − 5 mmHg”") == _norm('"Systolic - 5 mmHg"')

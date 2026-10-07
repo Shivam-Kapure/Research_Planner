@@ -50,12 +50,63 @@ At least 4 distinct agents, clear responsibilities, planning/reasoning/tool use/
 
 ## Current Phase
 
-**Phase 6 complete: five agents, LangGraph orchestration and adaptive replanning.**
-- Proven by deterministic tests that execute the real graph. These use scripted LLMs; no live LLM calls and no API keys.
-- There is no Runs REST API, persistence of run outputs, frontend or deployment yet.
-- Design: [docs/PHASE1_ARCHITECTURE.md](docs/PHASE1_ARCHITECTURE.md), [docs/PHASE6_MULTI_AGENT.md](docs/PHASE6_MULTI_AGENT.md).
+**Phase 7 complete: Runs API, persistence, and the first real end-to-end run.**
+- The Phase 6 graph now runs behind an authenticated Runs API, with persisted runs, agent outputs and traces.
+- One real free-tier run succeeded (`completed_with_limitations`) and its trace is exported unedited to `docs/traces/`.
+- No frontend or deployment yet.
+- Design: [docs/PHASE1_ARCHITECTURE.md](docs/PHASE1_ARCHITECTURE.md), [docs/PHASE6_MULTI_AGENT.md](docs/PHASE6_MULTI_AGENT.md), [docs/PHASE7_RUNS_API.md](docs/PHASE7_RUNS_API.md).
 
-**Next:** Phase 7, Runs API, end-to-end tests and the first real trace.
+**Next:** Phase 8, the frontend. Visual inspiration is the editorial restraint of lujoliving.com: typography, whitespace, large sections and storytelling. That's for style only; no content, branding or assets are copied.
+
+## Phase 7: What Was Added
+
+- **Database** (migration `0003`):
+  - `runs` (status check constraint, progress counters, safe error JSONB, index on user + created_at).
+  - `agent_outputs` (contract JSON per agent and iteration; cascades with its run).
+  - `trace_events.run_id` FK → `runs` with ON DELETE CASCADE, added **NOT VALID** so trace rows from before Phase 7 are kept while new rows are enforced. The append-only trigger is unchanged.
+- **Runs API** (`app/api/runs.py`, `app/schemas/api/runs.py`):
+  - `POST /api/runs` returns 202 and runs in the background; one active run per user.
+  - `GET /api/runs` paginates.
+  - `GET /api/runs/{id}`, `/events?after=&limit=`, `/outputs`, `/result` (409 while running), and `POST /{id}/cancel`.
+  - Ownership: another user's run returns 404; unauthenticated requests return 401.
+- **Execution** (`app/services/runs.py`):
+  - `RunExecutor` runs the same Phase 6 `run_research()` in in-process asyncio tasks behind a semaphore (`MAX_CONCURRENT_RUNS`, default 1).
+  - `DbRunSink` persists each agent's contracts as soon as the node finishes, links them to the trace via `output_ref`, updates progress, and marks a key `invalid` when the provider rejects it.
+  - On startup, runs left queued or running are marked `failed: interrupted`.
+  - The budget is never reset by replanning.
+- **Graph integration:**
+  - `traced()` persists outputs and progress through an optional `RunSink` on `ResearchRuntime`.
+  - Validation errors are summarised without echoing model output.
+  - The agent base reports rejected credentials.
+- **Credentials:** `PUT /api/credentials/{provider}` checks the key with one model-list call (`valid`/`invalid`/`unverified`); `VALIDATE_CREDENTIALS_ON_SAVE`.
+- **App wiring:**
+  - One shared `httpx2` client and one literature service (shared Semantic Scholar pacing).
+  - Lifespan sweep and shutdown.
+  - Startup still needs no LLM key.
+- **Provider controls** found necessary in the live runs: `GROQ_REASONING_EFFORT` (gpt-oss) and `GEMINI_THINKING_LEVEL` (Gemini 3.x).
+- **Fixes from real runs, each with a regression test:**
+  - The Writer's retry now feeds back the actual validation problem.
+  - The citation rule is stated in the Writer's output-schema description, because `gemini-3.5-flash-lite` ignored the prompt-only instruction.
+  - The Writer always states a limitation when no synthesis exists.
+  - Quote grounding now folds Unicode hyphens and non-breaking spaces.
+  - pypdf's warnings were silenced in logs.
+
+## Phase 7 Validation (actually run, 2026-10-08)
+
+- **Backend CI sequence, run locally:** `uv lock --check`, `uv sync --locked`, ruff check, ruff format --check and mypy (strict) all pass. **pytest: 388 passed** (23 new) against real PostgreSQL 17, covering:
+  - API end-to-end runs through the real graph, including the **adaptive insufficient → search_revision → sufficient** path
+  - ownership (detail, result, trace, outputs, cancel, list)
+  - the lifecycle queued → running → completed with bounded concurrency
+  - failed (no provider), partial (Writer failure), completed_with_limitations (iteration limit), cancel, and the startup sweep
+  - pagination, run-delete cascade through the append-only trace, key checks on save, provider 401 → key marked invalid
+  - no secrets in the `runs`, `agent_outputs` and trace tables or in API responses
+- **Mutation check:** removing the user filter from `get_owned` made the ownership test fail. It was restored.
+- **Migration 0003:** verified on a database that already held a trace row for a run that didn't exist. The row was kept and the FK was `NOT VALID`; a new orphan row was rejected; `alembic check` reported no drift; downgrade 0002 and re-upgrade both worked.
+- **Real runs** (local stack, the user's free-tier Groq + Gemini keys entered through a hidden prompt into the credentials API; the keys never appeared in chat, files or logs). There were four genuine attempts; all are kept in the database and documented in PHASE7_RUNS_API.md:
+  - `accaccc5`: **failed**, which exposed the model configuration issues.
+  - `769ca6b8` and `531f100b`: **partial**, which exposed the Writer issues.
+  - **`34908068-3832-4445-9f2f-8911e9414b93`: `completed_with_limitations`.** Path: planner → search → analysis → synthesis(insufficient) → replanning(search_revision) → search → analysis → synthesis(insufficient) → limit_reached(budget_limit) → writer. The run had 125 trace events, 48 LLM calls (80k tokens), 12 literature searches and 12 document retrievals (4 full text), and produced a 4-section review with 7 references.
+- **Secret scan of the real run:** both provider keys, the session cookie, the password hash and the encryption key were absent from the DB tables, API responses and server logs.
 
 ## Phase 6: What Was Added
 
@@ -272,8 +323,10 @@ cd frontend && npm ci && npm run lint && npm run typecheck && npm run build
 - **SSRF DNS rebinding:** the DNS check and the connection are separate lookups, so a hostile DNS server could rebind between them. The fetcher blocks obvious SSRF but is not an egress firewall.
 - **Literature rate limiter:** `build_literature_service()` creates a new Semantic Scholar limiter per service. Phase 6/7 should build one service per process so that pacing is shared.
 - **No per-round or per-run search budget** (6 search requests per round, 15 papers per run) is enforced in the tools; those bounds belong to the Phase 6 orchestrator. The tools enforce only per-call limits.
-- **No live LLM run yet:** the agents' prompts have only been exercised with scripted LLMs. The first real run with free-tier keys, and prompt tuning against real model output, happens in Phase 7 together with the Runs API and the first real trace.
-- **Run outputs are not persisted yet:** `agent_outputs` and `runs` are Phase 7. Trace `input_ref`/`output_ref` are still empty, and the trace `run_id` has no foreign key yet.
+- **Groq free-tier TPM:** Groq's tokens-per-minute limit (8K on gpt-oss) is the binding constraint for Document Analysis prompts (~4–5K tokens each, run two at a time). In the real run, 24 of 48 attempts were 429s, handled with `Retry-After` and fallbacks. Because rejected attempts count toward the 60-call budget, research stopped after iteration 2 (`budget_limit`). Recommendations: lower `GROQ_REQUESTS_PER_MINUTE`, prefer Gemini for analysis, or don't count 429-rejected attempts toward the budget (a deliberate design decision, left unchanged).
+- **Execution is not durable:** runs live in the API process. A restart fails queued and running runs (`interrupted`), and there is no queue by design (free tier).
+- **Free-tier model churn:** `gemini-2.5-*` disappeared for new users during development. Model IDs must be checked against the provider when deploying.
+- **Trace `input_ref`** is still unused. `output_ref` links each `agent_completed` event to its first persisted output.
 - **Trace agent names:** the trace uses the existing agent names (planner, search, analysis, synthesis, writer, orchestrator), with graph node names in messages and handoffs. The replanning node is recorded as `orchestrator`, so no trace migration was needed.
 - **Quote grounding** uses normalised exact substring matching (case, whitespace, quote marks and dashes). It is stricter than the architecture's fuzzy ≥ 0.9, so slightly misquoted evidence is dropped and the paper gets one retry.
 - **Search tool calling** uses the planned/refined query loop rather than native function calling, so `generate_with_tools` was not needed.
@@ -321,7 +374,7 @@ Free tiers and free access only: Vercel Hobby, Render Free, Neon Free, free-tier
 4. ~~Agent contracts, LLM provider layer and trace recorder~~ (complete)
 5. ~~Tools: OpenAlex, Semantic Scholar, dedupe, PDF~~ (complete)
 6. ~~Agents, LangGraph orchestration and replanning~~ (complete)
-7. Runs API, end-to-end tests and first real trace
+7. ~~Runs API, end-to-end tests and first real trace~~ (complete)
 8. Frontend
 9. Deployment
 10. Final documentation and demo

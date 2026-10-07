@@ -1,6 +1,7 @@
 """Deterministic test doubles for Phase 6. Real agents, real graph, real tools and real trace
 recorder; only the LLM provider and the literature source are scripted (no network, no keys)."""
 
+import asyncio
 import json
 import re
 import uuid
@@ -18,7 +19,7 @@ from app.services.trace_recorder import TraceRecorder
 from app.tools.documents.pdf import SafePdfFetcher
 from app.tools.literature.models import Paper, ProviderSearchResult, SearchQuery, SourceRef
 from app.tools.literature.search import LiteratureSearchService
-from tests.conftest import execute
+from tests.conftest import create_run, execute
 from tests.llm_fakes import FakeClock
 from tests.tool_fakes import public_resolver
 
@@ -353,13 +354,14 @@ async def make_runtime(
     gateway: LLMGateway | None = None,
 ) -> tuple[ResearchRuntime, CatalogSource]:
     source = CatalogSource(catalog)
+    user_id = await make_user(app)
     runtime = ResearchRuntime(
         gateway=gateway
         or LLMGateway({"groq": llm}, {"groq": ["scripted-model"]}, sleep=FakeClock().sleep),
         literature=LiteratureSearchService({"openalex": source}),
         fetcher=SafePdfFetcher(pdf_server(missing_pdfs), resolver=public_resolver),
         recorder=TraceRecorder(
-            app.state.database.sessionmaker, run_id=uuid.uuid4(), user_id=await make_user(app)
+            app.state.database.sessionmaker, run_id=await create_run(app, user_id), user_id=user_id
         ),
         limits=limits or ResearchLimits(),
     )
@@ -375,3 +377,68 @@ async def trace_rows(app: FastAPI, run_id: uuid.UUID) -> list[dict[str, Any]]:
             {"r": run_id},
         )
         return [json.loads(row[0]) for row in result]
+
+
+# ---------------------------------------------------------------- Runs API helpers
+
+
+class GatedLLM(ScriptedLLM):
+    """A ScriptedLLM that waits for `gate` before answering, to observe queued/running states."""
+
+    def __init__(self, scripts: dict[str, list[Reply]], gate: "asyncio.Event") -> None:
+        super().__init__(scripts)
+        self.gate = gate
+
+    async def generate(self, request: LLMRequest) -> LLMResponse:
+        await self.gate.wait()
+        return await super().generate(request)
+
+
+def install_executor(
+    app: FastAPI,
+    llm: ScriptedLLM | None,
+    catalog: Callable[[str], list[Paper]],
+    *,
+    missing_pdfs: set[str] = frozenset(),  # type: ignore[assignment]
+    gateway_factory: Any = None,
+    max_concurrent: int = 1,
+    limits: ResearchLimits | None = None,
+) -> CatalogSource:
+    """Replace the app's run executor with one wired to scripted test doubles."""
+    from app.services.runs import RunExecutor
+
+    source = CatalogSource(catalog)
+
+    async def scripted_gateway(db: Any, user_id: uuid.UUID) -> LLMGateway:
+        if llm is None:
+            return LLMGateway({}, {"groq": ["scripted-model"]})
+        return LLMGateway({"groq": llm}, {"groq": ["scripted-model"]}, sleep=FakeClock().sleep)
+
+    app.state.run_executor = RunExecutor(
+        app.state.database.sessionmaker,
+        gateway_factory=gateway_factory or scripted_gateway,
+        literature=LiteratureSearchService({"openalex": source}),
+        fetcher=SafePdfFetcher(pdf_server(missing_pdfs), resolver=public_resolver),
+        max_concurrent=max_concurrent,
+        limits=limits,
+    )
+    return source
+
+
+async def wait_for_run(
+    client: Any, run_id: str, *, until: tuple[str, ...] | None = None, timeout_s: float = 30
+) -> dict[str, Any]:
+    """Poll GET /api/runs/{id} (as a client would) until it reaches one of `until`."""
+    import asyncio as _asyncio
+
+    from app.schemas.api.runs import TERMINAL_STATUSES
+
+    wanted = until or TERMINAL_STATUSES
+    deadline = _asyncio.get_running_loop().time() + timeout_s
+    while True:
+        body: dict[str, Any] = (await client.get(f"/api/runs/{run_id}")).json()
+        if body["status"] in wanted:
+            return body
+        if _asyncio.get_running_loop().time() > deadline:
+            raise AssertionError(f"run stuck in {body['status']}")
+        await _asyncio.sleep(0.02)

@@ -1,7 +1,9 @@
-from fastapi import APIRouter, HTTPException, status
+import httpx2
+from fastapi import APIRouter, HTTPException, Request, status
 
-from app.api.deps import CredentialServiceDep, CurrentUser
+from app.api.deps import CredentialServiceDep, CurrentUser, SettingsDep
 from app.db.models import ProviderCredential
+from app.llm.key_check import check_provider_key
 from app.schemas.api.credentials import CredentialIn, CredentialStatus, Provider
 
 router = APIRouter(prefix="/credentials", tags=["credentials"])
@@ -30,9 +32,21 @@ async def list_credentials(
 
 @router.put("/{provider}")
 async def save_credential(
-    provider: Provider, body: CredentialIn, user: CurrentUser, service: CredentialServiceDep
+    provider: Provider,
+    body: CredentialIn,
+    user: CurrentUser,
+    service: CredentialServiceDep,
+    settings: SettingsDep,
+    request: Request,
 ) -> CredentialStatus:
-    credential = await service.save(user.id, provider.value, body.api_key.get_secret_value())
+    """Store the key encrypted, then (unless disabled) check it with one cheap call to the
+    provider: status becomes valid, invalid or unverified (provider unreachable)."""
+    api_key = body.api_key.get_secret_value()
+    credential = await service.save(user.id, provider.value, api_key)
+    if settings.validate_credentials_on_save:
+        client: httpx2.AsyncClient = request.app.state.http_client
+        result = await check_provider_key(client, provider.value, api_key)
+        credential = await service.set_status(user.id, provider.value, result) or credential
     return _status(provider, credential)
 
 

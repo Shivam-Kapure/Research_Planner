@@ -240,7 +240,25 @@ def _source(document: DocumentResult, max_chars: int) -> tuple[str, list[tuple[i
 
 
 _WS = re.compile(r"\s+")
-_QUOTE_CHARS = str.maketrans({"“": '"', "”": '"', "‘": "'", "’": "'", "–": "-", "—": "-"})
+# Typographic variants found in real PDFs (curly quotes, en/em dashes, non-breaking and other
+# Unicode hyphens, minus sign, non-breaking space) are folded before matching.
+_QUOTE_CHARS = str.maketrans(
+    {
+        "“": '"',
+        "”": '"',
+        "‘": "'",
+        "’": "'",
+        "‐": "-",
+        "‑": "-",
+        "‒": "-",
+        "–": "-",
+        "—": "-",
+        "―": "-",
+        "−": "-",
+        " ": " ",
+        " ": " ",
+    }
+)
 
 
 def _norm(text: str) -> str:

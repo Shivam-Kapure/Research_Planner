@@ -5,12 +5,15 @@ user's provider keys on demand), HTTP-backed tools and the trace recorder. Graph
 ever holds research data.
 """
 
+import uuid
 from dataclasses import dataclass, field
 from typing import Protocol
 
 from app.llm.errors import LLMError
 from app.llm.gateway import AttemptRecord, LLMGateway
 from app.orchestration.validation import SufficiencyRules
+from app.schemas.contracts import Contract
+from app.schemas.trace import TraceAgent
 from app.services.trace_recorder import TraceRecorder
 from app.tools.documents.pdf import SafePdfFetcher
 from app.tools.literature.models import LiteratureSearchResult, SearchQuery, Source
@@ -68,6 +71,19 @@ class RunBudget:
         return remaining >= estimate and self.tokens < self.limits.max_tokens * 0.85
 
 
+class RunSink(Protocol):
+    """Where a run's progress and agent outputs go (the Runs service in production). Optional:
+    the graph works without one (e.g. in agent tests)."""
+
+    async def save_output(
+        self, agent: TraceAgent, iteration: int, output: Contract
+    ) -> uuid.UUID: ...
+
+    async def progress(self, iteration: int, budget: "RunBudget") -> None: ...
+
+    async def credential_rejected(self, provider: str) -> None: ...
+
+
 class LiteratureSearch(Protocol):
     async def search(
         self, query: SearchQuery, *, sources: tuple[Source, ...] = ..., max_results: int = ...
@@ -82,7 +98,8 @@ class ResearchRuntime:
     recorder: TraceRecorder
     limits: ResearchLimits = field(default_factory=ResearchLimits)
     rules: SufficiencyRules = field(default_factory=SufficiencyRules)
-    budget: RunBudget = field(init=False)
+    sink: RunSink | None = None
+    budget: RunBudget = field(init=False)  # one budget per run, never reset by replanning
 
     def __post_init__(self) -> None:
         self.budget = RunBudget(self.limits)

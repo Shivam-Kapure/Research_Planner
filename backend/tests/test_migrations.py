@@ -5,7 +5,14 @@ from fastapi import FastAPI
 
 from tests.conftest import alembic_config, scalar
 
-TABLES = ("users", "sessions", "user_provider_credentials", "trace_events")
+TABLES = (
+    "users",
+    "sessions",
+    "user_provider_credentials",
+    "trace_events",
+    "runs",
+    "agent_outputs",
+)
 
 
 @pytest.mark.anyio
@@ -21,6 +28,11 @@ async def test_migrated_schema_exists_at_head(app: FastAPI, migrated_database: s
         "AND NOT tgisinternal",
     )
     assert trigger == "trace_events_append_only"
+    fk = await scalar(
+        app,
+        "SELECT confdeltype::text FROM pg_constraint WHERE conname = 'fk_trace_events_run_id_runs'",
+    )
+    assert fk == "c"  # trace rows are deleted with their run (cascade)
 
 
 def test_models_match_migrations(migrated_database: str) -> None:
@@ -30,6 +42,7 @@ def test_models_match_migrations(migrated_database: str) -> None:
 
 def test_downgrade_and_upgrade_round_trip(migrated_database: str) -> None:
     cfg = alembic_config(migrated_database)
+    command.downgrade(cfg, "0002")  # drops runs, agent_outputs and the trace FK
     command.downgrade(cfg, "0001")  # drops trace_events, its trigger and function
     command.downgrade(cfg, "base")
     command.upgrade(cfg, "head")
