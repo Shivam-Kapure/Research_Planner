@@ -50,24 +50,42 @@ At least 4 distinct agents, clear responsibilities, planning/reasoning/tool use/
 
 ## Current Phase
 
-**Phase 0: project setup and rules.** No application code exists yet.
+**Phase 1 complete: architecture and technology selection.** No application code exists yet. Full design: [docs/PHASE1_ARCHITECTURE.md](docs/PHASE1_ARCHITECTURE.md).
 
-## Postponed to Phase 1
+**Next:** Phase 2, Foundation.
 
-- Final technology stack (language, backend framework, frontend framework)
-- Agent orchestration approach/framework
-- Literature source APIs and tools
-- Inter-agent message schemas and I/O contracts
-- Data model and persistence design
-- Authentication approach and API-key handling
-- Testing frameworks and strategy
-- Repository/folder structure
+## Phase 1 Decisions
 
-## Upcoming Phases (tentative)
+- **Orchestration:** LangGraph `StateGraph` (no LangChain model wrappers). Routing is driven by agent outputs. The Evidence Synthesis Agent emits a `ReplanningRequest`, which routes to Search (search revision) or the Planner (scope revision). Bounded at 3 research iterations.
+- **Backend:** Python 3.12, FastAPI, Pydantic v2, SQLAlchemy 2 async + asyncpg, Alembic, httpx, uv. Runs execute as in-process background tasks, and the UI polls for progress.
+- **Frontend:** Next.js (App Router) + TypeScript + Tailwind, TanStack Query, OpenAPI-generated types. The API is accessed same-origin through a Vercel rewrite proxy.
+- **Database:** Neon PostgreSQL. Relational tables plus JSONB `agent_outputs`. PDFs, full text and decrypted keys stay transient.
+- **Auth:** backend-owned email/password (Argon2id) with opaque DB sessions in an httpOnly cookie.
+- **User API keys:** encrypted with MultiFernet, write-only, validated on save, and kept out of graph state, traces and logs.
+- **LLM:** own `LLMProvider` protocol (Groq, Gemini), configured per agent role with fallback.
+- **Literature:** OpenAlex (primary) + Semantic Scholar (secondary).
+- **PDF:** pypdf, with abstract-only fallback and quote-grounding validation.
+- **Trace:** own append-only `trace_events` table, exportable as JSON. Only traces from real runs are kept.
+- **Tests:** pytest/respx/scripted LLM/real Postgres; Vitest + RTL; one Playwright smoke test. CI on GitHub Actions.
+- **Deploy:** Vercel Hobby (frontend) + Render Free (backend) + Neon Free (DB). Docker only for the backend image and local Postgres. The frontend handles Render cold starts with a waking state and a readiness check.
+- **LLM budget:** at most 3 iterations, 6 papers per iteration and 15 per run, 60 LLM calls and 200k tokens per run, per-provider rate limiting. Model IDs are configurable free-tier candidates.
 
-1. Phase 1: stack comparison against CA3, architecture, data flow, I/O contracts
-2. Phase 2: backend foundation, database and auth
-3. Phase 3: agent implementation and orchestration, including the replanning loop
-4. Phase 4: automated tests and execution tracing
-5. Phase 5: frontend
-6. Phase 6: deployment, final documentation and CA3 evidence
+## Hard Cost Constraint
+
+Free tiers and free access only: Vercel Hobby, Render Free, Neon Free, free-tier Groq/Gemini keys (Groq only, Gemini only, or both), and free OpenAlex/Semantic Scholar access. No paid plan, billing-enabled API or paid subscription may be required, and no service is to be upgraded. Free-tier limits apply and are documented in the architecture doc.
+
+## Open Items (team input)
+
+- Per-member ownership split.
+
+## Implementation Phases
+
+2. Foundation: repo skeleton, FastAPI and Next.js scaffolds, CI, local Postgres
+3. Database, auth and encrypted credentials
+4. Agent contracts, LLM provider layer and trace recorder
+5. Tools: OpenAlex, Semantic Scholar, dedupe, PDF
+6. Agents, LangGraph orchestration and replanning
+7. Runs API, end-to-end tests and first real trace
+8. Frontend
+9. Deployment
+10. Final documentation and demo
