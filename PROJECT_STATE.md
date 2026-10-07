@@ -50,9 +50,48 @@ At least 4 distinct agents, clear responsibilities, planning/reasoning/tool use/
 
 ## Current Phase
 
-**Phase 5 complete: literature search, deduplication and PDF/document tools.** The five agents, LangGraph orchestration, replanning and research runs do not exist yet. Design: [docs/PHASE1_ARCHITECTURE.md](docs/PHASE1_ARCHITECTURE.md).
+**Phase 6 complete: five agents, LangGraph orchestration and adaptive replanning.**
+- Proven by deterministic tests that execute the real graph. These use scripted LLMs; no live LLM calls and no API keys.
+- There is no Runs REST API, persistence of run outputs, frontend or deployment yet.
+- Design: [docs/PHASE1_ARCHITECTURE.md](docs/PHASE1_ARCHITECTURE.md), [docs/PHASE6_MULTI_AGENT.md](docs/PHASE6_MULTI_AGENT.md).
 
-**Next:** Phase 6, Agents, LangGraph orchestration and replanning.
+**Next:** Phase 7, Runs API, end-to-end tests and the first real trace.
+
+## Phase 6: What Was Added
+
+- **Agents** (`backend/app/agents/`): five distinct classes, each with its own prompt, LLM output schema and Phase 4 contract.
+  - `PlannerAgent`: request → `ResearchPlan`. Handles scope revision using the `ReplanningRequest`; the version is set by code.
+  - `LiteratureSearchAgent`: plan → LLM query plan → Phase 5 search tools → at most one LLM refinement → one batched LLM screening → `SearchResults`. Search revisions run the synthesis directives first and exclude papers already seen.
+  - `DocumentAnalysisAgent`: for each paper, Phase 5 retrieval (full text, abstract or nothing) → LLM extraction → **quote grounding** (with one retry) → `DocumentAnalysis`. A failing paper is isolated.
+  - `EvidenceSynthesisAgent`: code computes coverage → the LLM proposes a verdict, themes, contradictions and replanning → the **deterministic validator** accepts or overrides → `SynthesisDecision` + a `ReplanningRequest` that is checked against the decision.
+  - `ReviewWriterAgent`: accumulated state → `FinalReview`. Citations are `[@Pn]` keys only, and references are built from metadata. Limitations are listed whenever evidence is not sufficient. Invented citation keys get one retry.
+  - `agents/base.py`: shared plumbing only — gateway calls with traced provider fallback (≤ 3 candidates), budget checks, and an `llm_call` trace for every attempt, failed ones included.
+- **Orchestration** (`backend/app/orchestration/`):
+  - `graph.py`: a LangGraph `StateGraph` with the nodes planner, literature_search, document_analysis, evidence_synthesis, replanning and review_writer, and conditional edges after synthesis (writer / replanning / limit_reached) and after replanning (search_revision / scope_revision).
+  - `state.py`: typed `ResearchState` holding research data only, with append-only reducers.
+  - `routing.py`: pure route functions.
+  - `validation.py`: `SufficiencyRules`, `compute_coverage` and `validate_verdict`.
+  - `runtime.py`: `ResearchRuntime` (gateway, tools, recorder — secrets stay here, not in state), `ResearchLimits` and `RunBudget`.
+  - `runner.py`: `run_research()` traces `run_started`/`run_completed`, applies the recursion limit (40) and the run timeout (20 min), and returns a structured final state (`completed`, `completed_with_limitations`, `partial` or `failed`).
+- **Phase 4 change (additive):** `LLMError.attempts` now carries the attempt records made before a failure, so failed LLM calls are traced too.
+- **Dependency:** `langgraph>=1.2.14,<1.3` (1.2.14 resolved). It pulls in transitive packages including `langchain-core` and the `langsmith` client library. LangSmith is **not used**, needs no account, and is off unless `LANGSMITH_TRACING` is set, which this project never does. No existing package versions changed.
+- **Docs:** `docs/PHASE6_MULTI_AGENT.md`.
+
+## Phase 6 Validation (actually run, 2026-10-08)
+
+- **Backend CI sequence, run locally:** `uv lock --check`, `uv sync --locked`, ruff check, ruff format --check and mypy (strict) all pass. **pytest: 365 passed** (42 new) against real PostgreSQL 17.
+- **Real graph executions** (`tests/test_research_graph.py`), with the trace checked event by event:
+  - **planner → search → analysis → synthesis(insufficient) → replanning(search_revision) → search → analysis → synthesis(sufficient) → writer**. One PDF returned 404 and that paper was analysed from its abstract.
+  - **contradictory → scope_revision → planner (plan v2) → search → analysis → synthesis(sufficient) → writer**.
+  - iteration limit: 3 syntheses and 2 replans → `limit_reached` → a review marked `limited`, with a limitations entry for the iteration limit.
+  - an LLM "sufficient" that the validator overrode to insufficient, after which the loop continued.
+  - a per-paper failure that did not stop the run.
+  - a fatal no-provider error, recorded as a structured `failed` state.
+  - gap-free, parented trace sequences.
+- **Per-agent tests** (`tests/test_agents.py`) cover each agent alone, the validator matrix, coverage and routing.
+- **Secrets** (`tests/test_research_secrets.py`): a real encrypted Groq key goes through the real adapter over a mock transport. The key appears in the Authorization header only, never in the pickled state or the trace rows.
+- **Mutation checks:** I temporarily made routing never replan, made the validator never override, and made Search ignore the directives. 13 tests failed, and all three changes were reverted.
+- **Manual inspection:** printed the trace of a real adaptive run (62 events) and confirmed the agent order, verdicts, routes and iteration labels.
 
 ## Phase 5: What Was Added (`backend/app/tools/`, deterministic, no LLM)
 
@@ -233,7 +272,12 @@ cd frontend && npm ci && npm run lint && npm run typecheck && npm run build
 - **SSRF DNS rebinding:** the DNS check and the connection are separate lookups, so a hostile DNS server could rebind between them. The fetcher blocks obvious SSRF but is not an egress firewall.
 - **Literature rate limiter:** `build_literature_service()` creates a new Semantic Scholar limiter per service. Phase 6/7 should build one service per process so that pacing is shared.
 - **No per-round or per-run search budget** (6 search requests per round, 15 papers per run) is enforced in the tools; those bounds belong to the Phase 6 orchestrator. The tools enforce only per-call limits.
-- **Per-run budget** (60 calls / 200k tokens) and provider fallback across a run are orchestration concerns for Phase 6. The gateway already exposes ordered `candidates()` and per-call `AttemptRecord`s for them.
+- **No live LLM run yet:** the agents' prompts have only been exercised with scripted LLMs. The first real run with free-tier keys, and prompt tuning against real model output, happens in Phase 7 together with the Runs API and the first real trace.
+- **Run outputs are not persisted yet:** `agent_outputs` and `runs` are Phase 7. Trace `input_ref`/`output_ref` are still empty, and the trace `run_id` has no foreign key yet.
+- **Trace agent names:** the trace uses the existing agent names (planner, search, analysis, synthesis, writer, orchestrator), with graph node names in messages and handoffs. The replanning node is recorded as `orchestrator`, so no trace migration was needed.
+- **Quote grounding** uses normalised exact substring matching (case, whitespace, quote marks and dashes). It is stricter than the architecture's fuzzy ≥ 0.9, so slightly misquoted evidence is dropped and the paper gets one retry.
+- **Search tool calling** uses the planned/refined query loop rather than native function calling, so `generate_with_tools` was not needed.
+- **Budget:** the budget is checked before each LLM call and before each new iteration. A call already in progress can still add up to 6 provider requests (Phase 4 bound).
 - **Registration** returns 409 for an existing email. This reveals the account exists, which can't be avoided without email verification, and the project has no email service (free-tier constraint).
 - **Local ports:** on this development machine, 5432, 8000 and 3000 are used by other projects. Set `POSTGRES_PORT` and the URLs in `.env`, and pass `--port` to uvicorn and `-p` to Next.js.
 - **Neon:** the asyncpg `ssl`/pooler settings for Neon are configured in Phase 9 (deployment).
@@ -276,7 +320,7 @@ Free tiers and free access only: Vercel Hobby, Render Free, Neon Free, free-tier
 3. ~~Database, auth and encrypted credentials~~ (complete)
 4. ~~Agent contracts, LLM provider layer and trace recorder~~ (complete)
 5. ~~Tools: OpenAlex, Semantic Scholar, dedupe, PDF~~ (complete)
-6. Agents, LangGraph orchestration and replanning
+6. ~~Agents, LangGraph orchestration and replanning~~ (complete)
 7. Runs API, end-to-end tests and first real trace
 8. Frontend
 9. Deployment

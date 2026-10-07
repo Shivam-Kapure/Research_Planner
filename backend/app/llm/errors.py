@@ -11,6 +11,9 @@ class LLMError(Exception):
         self.provider = provider
         self.message = message
         self.http_status = http_status
+        # AttemptRecords made before this error was raised (set by LLMGateway), so callers can
+        # trace failed calls too. Metadata only.
+        self.attempts: tuple[object, ...] = ()
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}(provider={self.provider!r}, code={self.code!r})"

@@ -117,9 +117,25 @@ class LLMGateway:
         at most `max_transient_retries` retries, so at most 6 provider calls in total.
         """
         choice = choice or self.candidates(role)[0]
-        conversation = [Message("system", json_instruction(schema)), *messages]
         attempts: list[AttemptRecord] = []
+        try:
+            return await self._structured(
+                schema, messages, choice, attempts, temperature, max_output_tokens
+            )
+        except LLMError as exc:
+            exc.attempts = tuple(attempts)
+            raise
 
+    async def _structured[T: BaseModel](
+        self,
+        schema: type[T],
+        messages: Sequence[Message],
+        choice: ModelChoice,
+        attempts: list[AttemptRecord],
+        temperature: float,
+        max_output_tokens: int,
+    ) -> StructuredResult[T]:
+        conversation = [Message("system", json_instruction(schema)), *messages]
         for repair in range(self._policy.max_repair_retries + 1):
             request = LLMRequest(
                 tuple(conversation),

@@ -4,7 +4,7 @@
 
 ResearchPilot turns a research question into a cited literature review. Five agents (Research Planner, Literature Search, Document Analysis, Evidence Synthesis, Review Writer) coordinate through a LangGraph state graph. The Evidence Synthesis Agent can send the run back for more research when the evidence is insufficient or contradictory, and the loop is bounded. Each run produces a real execution trace of the agent handoffs and decisions.
 
-> Status: **Phase 5 (literature and document tools)**. The backend has auth, encrypted user keys, versioned inter-agent contracts, a Groq/Gemini provider layer, an append-only execution trace, and deterministic literature-search and open-access PDF tools. The agents and the LangGraph workflow are not built yet. See [PROJECT_STATE.md](PROJECT_STATE.md) and [docs/PHASE1_ARCHITECTURE.md](docs/PHASE1_ARCHITECTURE.md).
+> Status: **Phase 6 (five agents + LangGraph adaptive loop)**. The backend has auth, encrypted user keys, versioned inter-agent contracts, a Groq/Gemini provider layer, an append-only execution trace, literature and open-access PDF tools, and the five-agent LangGraph workflow with deterministic sufficiency validation and bounded replanning. There is no Runs API or frontend yet. See [PROJECT_STATE.md](PROJECT_STATE.md) and [docs/PHASE1_ARCHITECTURE.md](docs/PHASE1_ARCHITECTURE.md).
 
 ## Stack
 
@@ -108,6 +108,20 @@ These are deterministic tools that the agents call: they make no LLM calls and n
   - `DocumentResult.excerpt()` returns page-numbered text within about 16k characters (~4k tokens) and stops at the reference list.
 
 Tool tests use `httpx2.MockTransport` and local PDF fixtures (`backend/tests/fixtures/pdf/`), so they need no network or keys.
+
+## Agents and orchestration (`backend/app/agents/`, `backend/app/orchestration/`)
+
+Five agents — Planner, Literature Search, Document Analysis, Evidence Synthesis and Review Writer — run as nodes of a LangGraph `StateGraph`:
+- Evidence Synthesis returns `sufficient`, `insufficient` or `contradictory`. Deterministic rules can override that verdict, and an override is traced.
+- When more research is needed, the graph loops back: a *search revision* goes to Search, and a *scope revision* goes to the Planner.
+- The loop is limited to 3 iterations, after which the Writer reports the limitations.
+- `run_research(runtime, request)` runs the graph and records a full trace.
+
+See [docs/PHASE6_MULTI_AGENT.md](docs/PHASE6_MULTI_AGENT.md). The graph tests use a scripted LLM, so they need no API keys or network:
+
+```bash
+cd backend && uv run pytest tests/test_research_graph.py tests/test_agents.py tests/test_research_secrets.py
+```
 
 ## Checks
 
