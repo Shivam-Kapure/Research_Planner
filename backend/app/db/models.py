@@ -1,22 +1,43 @@
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Integer,
     LargeBinary,
     String,
     UniqueConstraint,
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 
 PROVIDERS = ("groq", "gemini")
 CREDENTIAL_STATUSES = ("unverified", "valid", "invalid")
+TRACE_AGENTS = ("planner", "search", "analysis", "synthesis", "writer", "orchestrator")
+TRACE_EVENT_TYPES = (
+    "run_started",
+    "agent_started",
+    "agent_completed",
+    "llm_call",
+    "tool_call",
+    "tool_result",
+    "validation",
+    "decision",
+    "handoff",
+    "retry",
+    "replan",
+    "fallback",
+    "error",
+    "run_completed",
+)
+TRACE_STATUSES = ("ok", "warning", "failed")
 
 
 def _uuid_pk() -> Mapped[uuid.UUID]:
@@ -71,3 +92,45 @@ class ProviderCredential(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class TraceEvent(Base):
+    """Append-only execution trace (architecture §11). UPDATE and direct DELETE are rejected
+    by a database trigger; rows only disappear through the owning user's cascade delete.
+
+    `run_id` has no foreign key yet: the runs table arrives in Phase 7, which adds the
+    constraint with a non-destructive ALTER TABLE. `user_id` scopes reads to the owner.
+    """
+
+    __tablename__ = "trace_events"
+    __table_args__ = (
+        UniqueConstraint("run_id", "seq", name="uq_trace_events_run_seq"),
+        CheckConstraint("seq >= 1", name="seq_positive"),
+        CheckConstraint("iteration >= 0", name="iteration_non_negative"),
+        CheckConstraint(f"agent IN {TRACE_AGENTS!r}", name="agent"),
+        CheckConstraint(f"event_type IN {TRACE_EVENT_TYPES!r}", name="event_type"),
+        CheckConstraint(f"status IN {TRACE_STATUSES!r}", name="status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    run_id: Mapped[uuid.UUID]
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    seq: Mapped[int] = mapped_column(Integer)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    iteration: Mapped[int] = mapped_column(Integer)
+    agent: Mapped[str] = mapped_column(String(16))
+    event_type: Mapped[str] = mapped_column(String(24))
+    status: Mapped[str] = mapped_column(String(8))
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("trace_events.id", ondelete="CASCADE")
+    )
+    input_ref: Mapped[uuid.UUID | None]
+    output_ref: Mapped[uuid.UUID | None]
+    tool: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
+    decision: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
+    validation: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
+    llm: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
+    error: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
+    message: Mapped[str] = mapped_column(String(500))

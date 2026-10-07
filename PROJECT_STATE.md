@@ -50,11 +50,61 @@ At least 4 distinct agents, clear responsibilities, planning/reasoning/tool use/
 
 ## Current Phase
 
-**Phase 3 complete: database, authentication and encrypted user credentials.** There are no agents, LLM calls, literature tools, runs or traces yet. Design: [docs/PHASE1_ARCHITECTURE.md](docs/PHASE1_ARCHITECTURE.md).
+**Phase 4 complete: agent contracts, LLM provider layer and trace recorder.** The five agents, LangGraph orchestration, literature tools and research runs do not exist yet. Design: [docs/PHASE1_ARCHITECTURE.md](docs/PHASE1_ARCHITECTURE.md).
 
-**Next:** Phase 4, Agent contracts, LLM provider layer and trace recorder.
+**Next:** Phase 5, Tools (OpenAlex, Semantic Scholar, dedupe, PDF).
 
-## What Exists
+## Phase 4: What Was Added
+
+- **Contracts** (`app/schemas/contracts/`, architecture §9):
+  - The contracts are `ResearchRequest`, `ResearchPlan`, `SearchRequest`, `SearchResults`, `DocumentAnalysis` (with `EvidenceItem`), `EvidenceSet`, `SynthesisDecision`, `ReplanningRequest` and `FinalReview`.
+  - They are Pydantic v2 models: immutable, rejecting unknown fields, and carrying a `schema_name` plus a serialised `schema_version`. `canonical_json()` serialises them deterministically.
+  - Validation is built in:
+    - plan consistency, with a priority-1 sub-question and a revision reason required from version 2
+    - selected + rejected ≤ total, and unique papers
+    - evidence belongs to its paper, and abstract-only confidence is capped at 0.6
+    - the coverage rule from §12 (`coverage_status`) and verdict consistency
+    - `search_revision` / `scope_revision` requirements, and `ReplanningRequest.check_against(decision)`
+    - review citations must resolve to references
+  - Contracts carry no secrets and no database or provider fields. ResearchPlan gained a `search_strategy` field, which the Phase 4 spec required.
+- **LLM layer** (`app/llm/`):
+  - `LLMProvider` protocol, with Groq and Gemini REST adapters running on `httpx2` (now a runtime dependency). Groq uses the OpenAI-compatible chat completions API with a Bearer header. Gemini uses `generateContent` with the `x-goog-api-key` header, never the URL.
+  - `LLMGateway` is the single entry point:
+    - `generate_structured(schema, …)` adds a provider-neutral JSON instruction, requests JSON mode, validates with Pydantic, and allows one repair round that feeds back field errors without the submitted values.
+    - Transient retries are capped at 2 with 1 s / 2 s backoff, honouring `Retry-After` up to 60 s.
+    - Per-provider, per-key-owner RPM pacing.
+    - Role preferences: Groq for planner, search and analysis; Gemini for synthesis and writer. A role falls back to whichever provider exists.
+  - Errors are classified as `auth_failed`, `invalid_request`, `rate_limited`, `daily_quota_exhausted`, `timeout`, `provider_unavailable`, `bad_response`, `content_blocked`, `malformed_output`, `structured_output_invalid` and `no_provider_configured`.
+  - `build_gateway_for_user()` reads the user's keys through the Phase 3 `CredentialService.load_encrypted()`. Adapters hold only a reveal callable, so decryption happens per request and never in the LLM package.
+  - Startup does not require any LLM key. Calling the LLM with no key, or no configured model, raises `NoProviderConfigured`.
+- **Trace** (`app/services/trace_recorder.py`, `trace_sanitize.py`, `app/schemas/trace.py`):
+  - `TraceRecorder.record()` is the only write path. It sanitises, validates and appends one event per transaction, assigning gap-free per-run `seq` under a lock. `open()` continues an existing run's sequence.
+  - Typed helpers: `agent_started`, `agent_completed`, `tool_call`, `llm_call` (built from `AttemptRecord`, metadata only, never prompts), `decision` (decision, handoff, replan or fallback), `validation` and `error`.
+  - The redaction boundary removes values under credential-like keys (Authorization, Cookie, api_key, password, token, session, ciphertext, and so on). It also removes Groq/Google keys, Bearer values, Fernet tokens, Argon2 hashes, passwords in database URLs and opaque high-entropy tokens, while keeping UUIDs and hex paper IDs. Size limits: message 500, text 1000, raw excerpt 2000, 50 items, depth 6.
+  - `GET /api/runs/{run_id}/events?after=&limit=` returns events to their owner only. Anyone else gets 404, and an unauthenticated request gets 401.
+- **Migration `0002`:** creates `trace_events`, with (run_id, seq) unique, check constraints, a cascade-on-delete FK to `users`, and a self-FK on `parent_id`.
+  - A trigger rejects UPDATE and direct DELETE. A delete is allowed only inside a foreign-key cascade, i.e. when a user account is deleted.
+  - `run_id` deliberately has no FK until the `runs` table exists. Phase 7 adds one with a non-destructive `ALTER TABLE`.
+
+## Phase 4 Validation (actually run, 2026-10-08)
+
+- **Backend CI sequence, run locally:** `uv lock --check`, `uv sync --locked`, ruff check, ruff format --check and mypy (strict; app, tests, migrations) all pass. **pytest: 200 passed** (46 from Phase 3 plus 154 new) against real PostgreSQL 17, with no warnings.
+- **Mutation checks:** I temporarily broke three things:
+  - bypassing the trace sanitiser
+  - removing key scrubbing from Groq errors
+  - caching the decrypted key on the Gemini adapter
+
+  The secret, size and retention tests failed for each. All three changes were reverted.
+- **Alembic:**
+  - upgrade 0001 → 0002, then `alembic check` (no drift)
+  - trigger present
+  - downgrade to 0001 removes the table and the function
+  - base → head twice
+- **Docker image:** builds, `alembic current` shows `0002 (head)` inside it, `/readyz` returns 200, and the events endpoint returns 401 without a session. `docker compose config` is valid.
+- **gitleaks CLI 8.30.1:** git history and all 94 to-be-committed files are clean, and no real-key-shaped strings appear in tracked files.
+- **Not run:** GitHub Actions (only runs after a push), the frontend (unchanged), and real Groq/Gemini calls, which no test makes.
+
+## Phase 3: What Exists
 
 **Backend (`backend/`, uv, Python 3.12)**
 - **App:** `app/main.py` is the app factory (`uvicorn --factory app.main:create_app`). It refuses to start if `CREDENTIAL_ENCRYPTION_KEYS` is missing or invalid.
@@ -126,7 +176,10 @@ cd frontend && npm ci && npm run lint && npm run typecheck && npm run build
 
 - **Login rate limiting** (architecture §5, in-memory per IP and email) is not implemented yet; it is deferred to the Runs API hardening in Phase 7.
 - **Expired sessions** are rejected but not deleted, so periodic cleanup is still to be added.
-- **Credential validation** against Groq/Gemini (status `valid`/`invalid`) arrives with the LLM provider layer in Phase 4. Until then keys are stored as `unverified`.
+- **Credential validation** against Groq/Gemini (status `valid`/`invalid`) is not done yet. It needs a live list-models call on save, so it is deferred to Phase 6/7, where the runner can also mark keys `invalid` on an `auth_failed` error. Keys are stored as `unverified`, and the gateway skips keys marked `invalid`.
+- **No default model IDs:** `GROQ_MODELS` and `GEMINI_MODELS` are empty by default because free-tier availability changes. Before Phase 6 runs, they must be set to models verified as free-tier with a real key.
+- **Tool calling** (`generate_with_tools` in architecture §6) is not implemented. It arrives with the Search Agent in Phase 6 if that agent needs native function calling.
+- **Per-run budget** (60 calls / 200k tokens) and provider fallback across a run are orchestration concerns for Phase 6. The gateway already exposes ordered `candidates()` and per-call `AttemptRecord`s for them.
 - **Registration** returns 409 for an existing email. This reveals the account exists, which can't be avoided without email verification, and the project has no email service (free-tier constraint).
 - **Local ports:** on this development machine, 5432, 8000 and 3000 are used by other projects. Set `POSTGRES_PORT` and the URLs in `.env`, and pass `--port` to uvicorn and `-p` to Next.js.
 - **Neon:** the asyncpg `ssl`/pooler settings for Neon are configured in Phase 9 (deployment).
@@ -134,7 +187,8 @@ cd frontend && npm ci && npm run lint && npm run typecheck && npm run build
 ## Notes From Earlier Phases
 
 - Tailwind, TanStack Query and the other frontend libraries are deferred to Phase 8, which is the visual-design phase.
-- Backend tests use `httpx2` as the test-client transport, as Starlette recommends. Which HTTP client the runtime uses for external APIs will be confirmed in Phase 5.
+- `httpx2` (the Pydantic-maintained successor to httpx, which Starlette recommends) is the runtime HTTP client for the LLM adapters and the test-client transport. Its built-in `MockTransport` replaces `respx` in tests.
+- I used provider REST APIs instead of the `groq` / `google-genai` SDKs, which the architecture suggested. This means fewer dependencies, full control over headers and error text (so credentials can't leak), and simple mocking.
 - Next.js evaluates `BACKEND_URL` at build time, so it must be set in Vercel's build environment.
 - `npm audit` reports 0 production vulnerabilities. There are 5 high-severity advisories in dev-only ESLint tooling, left unchanged.
 
@@ -166,7 +220,7 @@ Free tiers and free access only: Vercel Hobby, Render Free, Neon Free, free-tier
 
 2. ~~Foundation~~ (complete)
 3. ~~Database, auth and encrypted credentials~~ (complete)
-4. Agent contracts, LLM provider layer and trace recorder
+4. ~~Agent contracts, LLM provider layer and trace recorder~~ (complete)
 5. Tools: OpenAlex, Semantic Scholar, dedupe, PDF
 6. Agents, LangGraph orchestration and replanning
 7. Runs API, end-to-end tests and first real trace

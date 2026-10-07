@@ -5,7 +5,7 @@ from fastapi import APIRouter, FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import auth, credentials, health
+from app.api import auth, credentials, health, runs
 from app.config import Settings, get_settings
 from app.core.security import origin_guard, validation_error_handler
 from app.db.session import Database
@@ -46,5 +46,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     api.include_router(health.router)
     api.include_router(auth.router)
     api.include_router(credentials.router)
+    api.include_router(runs.router)
     app.include_router(api)
     return app

@@ -18,6 +18,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 FRONTEND_ORIGIN = "https://app.researchpilot.test"
 BASE_URL = "https://testserver"  # https so Secure cookies round-trip like production
 PASSWORD = "correct horse battery staple"
+COOKIE_NAME = "rp_session"
 
 
 @pytest.fixture(scope="session")
@@ -82,7 +83,10 @@ def settings(migrated_database: str, encryption_key: str) -> Settings:
 
 async def _truncate(app: FastAPI) -> None:
     async with app.state.database.engine.begin() as conn:
-        await conn.execute(text("TRUNCATE users, sessions, user_provider_credentials CASCADE"))
+        # TRUNCATE fires no row triggers, so the append-only trace guard does not block it.
+        await conn.execute(
+            text("TRUNCATE users, sessions, user_provider_credentials, trace_events CASCADE")
+        )
 
 
 @pytest.fixture

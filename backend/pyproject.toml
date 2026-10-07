@@ -10,6 +10,7 @@ dependencies = [
     "cryptography>=50.0.2",
     "email-validator>=2.3.0",
     "fastapi>=0.142.2",
+    "httpx2>=2.13.1",
     "pydantic-settings>=2.15.0",
     "sqlalchemy[asyncio]>=2.1.4",
     "uvicorn>=0.54.0",
@@ -27,6 +28,7 @@ select = ["E", "F", "W", "I", "B", "UP", "S", "ASYNC"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S105", "S106"]  # asserts and fixed test-only credentials
+"migrations/versions/**" = ["E501"]  # generated DDL (long CHECK constraints)
 
 [tool.mypy]
 python_version = "3.12"
@@ -38,7 +40,6 @@ testpaths = ["tests"]
 
 [dependency-groups]
 dev = [
-    "httpx2>=2.13.1",
     "mypy>=2.4.0",
     "pytest>=9.1.1",
     "ruff>=0.16.10",

@@ -1,12 +1,14 @@
+import re
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import Field, SecretStr, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # Repository root: backend/app/config.py -> parents[2]
 _ROOT_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+_MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/\-]{0,127}$")
 
 
 class Settings(BaseSettings):
@@ -32,6 +34,29 @@ class Settings(BaseSettings):
     session_ttl_days: int = Field(default=7, ge=1, le=30)
     # Must be true in production. Locally, plain-http development needs false.
     session_cookie_secure: bool = True
+
+    # LLM providers. Candidate model IDs are configuration, never code: free-tier availability
+    # changes, so each list holds models the provider currently offers on its free tier, in
+    # order of preference. Users supply their own keys at runtime (never via env).
+    groq_models: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    gemini_models: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    groq_requests_per_minute: int = Field(default=20, ge=1, le=1000)
+    gemini_requests_per_minute: int = Field(default=8, ge=1, le=1000)
+    llm_request_timeout_s: float = Field(default=60.0, gt=0, le=300)
+    # Optional Gemini thinking budget (thinking tokens count against maxOutputTokens).
+    gemini_thinking_budget: int | None = Field(default=None, ge=0, le=32768)
+
+    @field_validator("groq_models", "gemini_models", mode="before")
+    @classmethod
+    def _split_models(cls, value: object) -> object:
+        if isinstance(value, str):
+            value = [m.strip() for m in value.split(",") if m.strip()]
+        if isinstance(value, list):
+            for model in value:
+                if not isinstance(model, str) or not _MODEL_ID.match(model):
+                    raise ValueError("model IDs may contain only letters, digits and . _ : / -")
+            return list(dict.fromkeys(value))
+        return value
 
     @field_validator("database_url")
     @classmethod

@@ -5,7 +5,7 @@ from fastapi import FastAPI
 
 from tests.conftest import alembic_config, scalar
 
-TABLES = ("users", "sessions", "user_provider_credentials")
+TABLES = ("users", "sessions", "user_provider_credentials", "trace_events")
 
 
 @pytest.mark.anyio
@@ -15,6 +15,12 @@ async def test_migrated_schema_exists_at_head(app: FastAPI, migrated_database: s
     assert await scalar(app, "SELECT version_num FROM alembic_version") == head
     for table in TABLES:
         assert await scalar(app, "SELECT to_regclass(:t) IS NOT NULL", t=table) is True
+    trigger = await scalar(
+        app,
+        "SELECT tgname FROM pg_trigger WHERE tgrelid = 'trace_events'::regclass "
+        "AND NOT tgisinternal",
+    )
+    assert trigger == "trace_events_append_only"
 
 
 def test_models_match_migrations(migrated_database: str) -> None:
@@ -24,6 +30,7 @@ def test_models_match_migrations(migrated_database: str) -> None:
 
 def test_downgrade_and_upgrade_round_trip(migrated_database: str) -> None:
     cfg = alembic_config(migrated_database)
+    command.downgrade(cfg, "0001")  # drops trace_events, its trigger and function
     command.downgrade(cfg, "base")
     command.upgrade(cfg, "head")
     command.upgrade(cfg, "head")  # idempotent at head
