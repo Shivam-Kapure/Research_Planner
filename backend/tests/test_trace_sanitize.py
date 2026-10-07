@@ -28,6 +28,27 @@ def test_database_url_password_is_redacted_but_host_kept() -> None:
 
 
 @pytest.mark.parametrize(
+    ("url", "secret"),
+    [
+        ("https://api.openalex.org/works?search=sleep&api_key=oa-TESTONLY-key-0000", "oa-TESTONLY"),
+        (
+            "https://cdn.example/a.pdf?X-Amz-Signature=abc123def&X-Amz-Credential=AKIDTEST",
+            "abc123def",
+        ),
+        ("https://repo.example/a.pdf?token=short-tok&page=2", "short-tok"),
+    ],
+)
+def test_query_string_credentials_are_redacted(url: str, secret: str) -> None:
+    out = redact_text(url)
+    assert secret not in out and REDACTED in out
+    assert out.startswith(url.split("?")[0])  # host and path stay useful for debugging
+
+
+def test_semantic_scholar_header_name_is_sensitive() -> None:
+    assert sanitize({"x-api-key": "s2-TESTONLY-key-0000"}) == {"x-api-key": REDACTED}
+
+
+@pytest.mark.parametrize(
     "safe",
     [
         str(uuid.uuid4()),

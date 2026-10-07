@@ -34,6 +34,11 @@ _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\$argon2(?:id|i|d)\$[^\s\"']+"),  # password hashes
 )
 _DB_URL_PASSWORD = re.compile(r"(?i)(\b[a-z][a-z0-9+.\-]*://[^:/\s@]+:)[^@\s/]+@")
+# Credentials in URL query strings (OpenAlex api_key, signed-URL signatures, tokens).
+_QUERY_SECRET = re.compile(
+    r"(?i)([?&](?:api[_\-]?key|key|token|access[_\-]?token|auth|signature|sig|"
+    r"x-amz-signature|x-amz-credential|x-goog-signature|password|secret)=)[^&#\s\"']+"
+)
 # Opaque high-entropy tokens (session tokens, Fernet keys): ≥32 chars of url-safe base64 with
 # both letters and digits. UUIDs and lower-case hex ids (e.g. Semantic Scholar) are kept.
 _OPAQUE_TOKEN = re.compile(r"(?<![A-Za-z0-9_\-])[A-Za-z0-9_\-]{32,}={0,2}(?![A-Za-z0-9_\-])")
@@ -52,6 +57,7 @@ def redact_text(text: str) -> str:
     for pattern in _SECRET_PATTERNS:
         text = pattern.sub(REDACTED, text)
     text = _DB_URL_PASSWORD.sub(lambda m: f"{m.group(1)}{REDACTED}@", text)
+    text = _QUERY_SECRET.sub(lambda m: f"{m.group(1)}{REDACTED}", text)
     return _OPAQUE_TOKEN.sub(_redact_opaque, text)
 
 

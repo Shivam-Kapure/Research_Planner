@@ -50,9 +50,59 @@ At least 4 distinct agents, clear responsibilities, planning/reasoning/tool use/
 
 ## Current Phase
 
-**Phase 4 complete: agent contracts, LLM provider layer and trace recorder.** The five agents, LangGraph orchestration, literature tools and research runs do not exist yet. Design: [docs/PHASE1_ARCHITECTURE.md](docs/PHASE1_ARCHITECTURE.md).
+**Phase 5 complete: literature search, deduplication and PDF/document tools.** The five agents, LangGraph orchestration, replanning and research runs do not exist yet. Design: [docs/PHASE1_ARCHITECTURE.md](docs/PHASE1_ARCHITECTURE.md).
 
-**Next:** Phase 5, Tools (OpenAlex, Semantic Scholar, dedupe, PDF).
+**Next:** Phase 6, Agents, LangGraph orchestration and replanning.
+
+## Phase 5: What Was Added (`backend/app/tools/`, deterministic, no LLM)
+
+- **Literature** (`tools/literature/`):
+  - **Contracts:** typed models `SearchQuery`, `Paper`, `SourceRef`, `ProviderSearchResult`, `LiteratureSearchResult` and `SourceOutcome`.
+    - `Paper` carries `paper_key`, taken from the strongest available ID: DOI, then OpenAlex, then Semantic Scholar, then arXiv, then a title hash.
+    - It also carries a deterministic `paper_id`, a UUID5 of `paper_key`, for the agent contracts.
+  - **Clients:** `OpenAlexClient` (`/works`) and `SemanticScholarClient` (`/graph/v1/paper/search`).
+    - They use async `httpx2`, a 20 s timeout, and a cap of 2 MB per response.
+    - At most 2 retries on timeout, 5xx or 429, honouring `Retry-After` up to 30 s; 4xx errors are never retried.
+    - Responses are normalised defensively.
+    - Credentials are all optional and free: OpenAlex mailto and API key, and the Semantic Scholar `x-api-key` header. The Semantic Scholar client paces itself with a rate limiter.
+  - **Bounds per call:** ≤ 25 results per source, page ≤ 3, ≤ 40 combined.
+  - **`LiteratureSearchService`:** queries both sources in parallel with OpenAlex first, then deduplicates and caps. If one source fails the result is marked degraded; if every source fails it raises `LiteratureUnavailable`.
+  - **`dedupe.py`:** exact keys only — DOI (normalised), then provider IDs, then title + year + first-author surname, which needs a title of at least 4 words. Papers with conflicting DOIs are never merged, and there is no fuzzy matching. Merges keep the provenance of every source and prefer the Semantic Scholar abstract.
+  - **`ranking.py`:** a weighted, explained score from reciprocal provider rank, log citations, recency over 30 years, open-access PDF and metadata completeness, with ties broken by `paper_key`. `filter_papers` filters by year, abstract and open access.
+- **Documents** (`tools/documents/`):
+  - **`oa.py`:** only provider-reported open-access PDF URLs are used.
+  - **`pdf.py` (`SafePdfFetcher`):**
+    - SSRF guards on every hop: http(s) on default ports only, no userinfo, internal hostnames refused, and every DNS answer must be a public IP. Loopback, private, link-local/metadata (169.254.169.254), CGNAT, ULA and IPv4-mapped addresses are blocked.
+    - At most 3 manually validated redirects, with no https → http downgrade.
+    - The content type must be a PDF type, and `%PDF-` must appear in the first 1 KB.
+    - Downloads are streamed with a **15 MB** cap (checked against the declared length and while reading) and a 30 s overall deadline.
+    - PDFs are held in memory only; no temporary files are created.
+  - **`extraction.py`:** pypdf runs in a worker thread with a 20 s deadline. Limits are ≤ 40 pages, 8k characters per page and 120k characters in total, with page numbers preserved. Encrypted or malformed PDFs fail as `InvalidPdf`. Fewer than 200 characters per page on average counts as `scanned_pdf`.
+  - **`service.retrieve_document(paper)`:** returns a `DocumentResult` with mode `full_text`, `abstract_only` or `unavailable`. Its `failure_reason` uses the Phase 4 `DocumentAnalysis` vocabulary, and it records the tool `error_code` and host. It never raises for document problems. `excerpt()` returns about 16k characters, page-numbered, stopping at the reference list.
+  - **`errors.py`:** structured tool errors with safe messages (host and status only). They are raised outside `except` blocks, so they carry no request context.
+- **Security hardening:**
+  - Log records from `httpx2` drop URL query strings, which can hold the OpenAlex `api_key`, signed-URL tokens or the mailto address.
+  - The Phase 4 trace sanitiser now also redacts credential query parameters (`api_key`, `token`, `signature`, …) and treats `x-api-key` as a sensitive key. This was strengthened, not weakened.
+- **Fixtures:** `tests/fixtures/pdf/build_fixtures.py` deterministically builds `paper.pdf` (4 pages with a text layer, including a reference list) and `scanned.pdf` (3 text-less pages). A test checks that the committed files match the builder.
+- **Dependency added:** `pypdf` 6.19 (BSD). No other services or infrastructure were added, and there is no cache.
+
+## Phase 5 Validation (actually run, 2026-10-08)
+
+- **Backend CI sequence, run locally:** `uv lock --check`, `uv sync --locked`, ruff check, ruff format --check and mypy (strict) all pass. **pytest: 323 passed** (123 new) against real PostgreSQL 17. `alembic check` reports no drift; there was no schema change.
+- **Tool tests:** all use `httpx2.MockTransport` and local PDF fixtures, with no network access. They include real pypdf extraction of the fixtures, the SSRF matrix (22 blocked destinations plus 5 redirect targets), size, signature and timeout limits, and the fallback reasons.
+- **Mutation checks:** I temporarily disabled three controls:
+  - redirect re-validation
+  - URL-query log redaction
+  - the streamed 15 MB cap
+
+  The tests failed for each, and all three were restored.
+- **Docker image:** builds (469 MB), imports the tools and pypdf, and `/readyz` returns 200. `docker compose config` is valid.
+- **gitleaks CLI 8.30.1:** git history and all 121 to-be-committed files are clean.
+- **Manual live smoke test** (not automated, no keys used):
+  - OpenAlex returned and normalised 5 results.
+  - Semantic Scholar, without a key, was rate-limited (429) after the bounded retries, so the service correctly degraded to OpenAlex-only.
+  - One real open-access PDF was fetched and all 8 pages were extracted, with the 16k-character excerpt applied.
+- **Not run:** GitHub Actions (only runs after a push) and the frontend (unchanged).
 
 ## Phase 4: What Was Added
 
@@ -179,6 +229,10 @@ cd frontend && npm ci && npm run lint && npm run typecheck && npm run build
 - **Credential validation** against Groq/Gemini (status `valid`/`invalid`) is not done yet. It needs a live list-models call on save, so it is deferred to Phase 6/7, where the runner can also mark keys `invalid` on an `auth_failed` error. Keys are stored as `unverified`, and the gateway skips keys marked `invalid`.
 - **No default model IDs:** `GROQ_MODELS` and `GEMINI_MODELS` are empty by default because free-tier availability changes. Before Phase 6 runs, they must be set to models verified as free-tier with a real key.
 - **Tool calling** (`generate_with_tools` in architecture §6) is not implemented. It arrives with the Search Agent in Phase 6 if that agent needs native function calling.
+- **Semantic Scholar without a key** is often rate-limited (seen in the live smoke test). Searches still work through OpenAlex, but a free S2 key is recommended for demos.
+- **SSRF DNS rebinding:** the DNS check and the connection are separate lookups, so a hostile DNS server could rebind between them. The fetcher blocks obvious SSRF but is not an egress firewall.
+- **Literature rate limiter:** `build_literature_service()` creates a new Semantic Scholar limiter per service. Phase 6/7 should build one service per process so that pacing is shared.
+- **No per-round or per-run search budget** (6 search requests per round, 15 papers per run) is enforced in the tools; those bounds belong to the Phase 6 orchestrator. The tools enforce only per-call limits.
 - **Per-run budget** (60 calls / 200k tokens) and provider fallback across a run are orchestration concerns for Phase 6. The gateway already exposes ordered `candidates()` and per-call `AttemptRecord`s for them.
 - **Registration** returns 409 for an existing email. This reveals the account exists, which can't be avoided without email verification, and the project has no email service (free-tier constraint).
 - **Local ports:** on this development machine, 5432, 8000 and 3000 are used by other projects. Set `POSTGRES_PORT` and the URLs in `.env`, and pass `--port` to uvicorn and `-p` to Next.js.
@@ -187,7 +241,7 @@ cd frontend && npm ci && npm run lint && npm run typecheck && npm run build
 ## Notes From Earlier Phases
 
 - Tailwind, TanStack Query and the other frontend libraries are deferred to Phase 8, which is the visual-design phase.
-- `httpx2` (the Pydantic-maintained successor to httpx, which Starlette recommends) is the runtime HTTP client for the LLM adapters and the test-client transport. Its built-in `MockTransport` replaces `respx` in tests.
+- `httpx2` (the Pydantic-maintained successor to httpx, which Starlette recommends) is the runtime HTTP client for the LLM adapters, the literature and PDF tools, and the test-client transport. Its built-in `MockTransport` replaces `respx` in tests.
 - I used provider REST APIs instead of the `groq` / `google-genai` SDKs, which the architecture suggested. This means fewer dependencies, full control over headers and error text (so credentials can't leak), and simple mocking.
 - Next.js evaluates `BACKEND_URL` at build time, so it must be set in Vercel's build environment.
 - `npm audit` reports 0 production vulnerabilities. There are 5 high-severity advisories in dev-only ESLint tooling, left unchanged.
@@ -221,7 +275,7 @@ Free tiers and free access only: Vercel Hobby, Render Free, Neon Free, free-tier
 2. ~~Foundation~~ (complete)
 3. ~~Database, auth and encrypted credentials~~ (complete)
 4. ~~Agent contracts, LLM provider layer and trace recorder~~ (complete)
-5. Tools: OpenAlex, Semantic Scholar, dedupe, PDF
+5. ~~Tools: OpenAlex, Semantic Scholar, dedupe, PDF~~ (complete)
 6. Agents, LangGraph orchestration and replanning
 7. Runs API, end-to-end tests and first real trace
 8. Frontend

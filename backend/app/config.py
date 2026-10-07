@@ -46,6 +46,21 @@ class Settings(BaseSettings):
     # Optional Gemini thinking budget (thinking tokens count against maxOutputTokens).
     gemini_thinking_budget: int | None = Field(default=None, ge=0, le=32768)
 
+    # Academic sources (free). All optional: both APIs work without credentials at lower
+    # limits. OPENALEX_API_KEY and SEMANTIC_SCHOLAR_API_KEY are free keys, never paid plans.
+    openalex_email: str | None = None  # OpenAlex "polite pool" contact address
+    openalex_api_key: SecretStr | None = None
+    semantic_scholar_api_key: SecretStr | None = None
+    semantic_scholar_requests_per_minute: int = Field(default=30, ge=1, le=600)
+    literature_timeout_s: float = Field(default=20.0, gt=0, le=120)
+
+    @field_validator(
+        "openalex_email", "openalex_api_key", "semantic_scholar_api_key", mode="before"
+    )
+    @classmethod
+    def _blank_is_unset(cls, value: object) -> object:
+        return None if isinstance(value, str) and not value.strip() else value
+
     @field_validator("groq_models", "gemini_models", mode="before")
     @classmethod
     def _split_models(cls, value: object) -> object:

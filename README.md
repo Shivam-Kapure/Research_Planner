@@ -4,7 +4,7 @@
 
 ResearchPilot turns a research question into a cited literature review. Five agents (Research Planner, Literature Search, Document Analysis, Evidence Synthesis, Review Writer) coordinate through a LangGraph state graph. The Evidence Synthesis Agent can send the run back for more research when the evidence is insufficient or contradictory, and the loop is bounded. Each run produces a real execution trace of the agent handoffs and decisions.
 
-> Status: **Phase 4 (agent contracts, LLM provider layer, trace recorder)**. The backend has auth, encrypted user keys, versioned inter-agent contracts, a Groq/Gemini provider layer and an append-only execution trace. The agents and the LangGraph workflow are not built yet. See [PROJECT_STATE.md](PROJECT_STATE.md) and [docs/PHASE1_ARCHITECTURE.md](docs/PHASE1_ARCHITECTURE.md).
+> Status: **Phase 5 (literature and document tools)**. The backend has auth, encrypted user keys, versioned inter-agent contracts, a Groq/Gemini provider layer, an append-only execution trace, and deterministic literature-search and open-access PDF tools. The agents and the LangGraph workflow are not built yet. See [PROJECT_STATE.md](PROJECT_STATE.md) and [docs/PHASE1_ARCHITECTURE.md](docs/PHASE1_ARCHITECTURE.md).
 
 ## Stack
 
@@ -83,9 +83,41 @@ Remove the local database and its data with `docker compose down -v`.
 
 Real API keys must never be committed. Automated tests never call Groq or Gemini; they use mocked HTTP transports and scripted providers.
 
+## Literature and document tools (`backend/app/tools/`)
+
+These are deterministic tools that the agents call: they make no LLM calls and no research decisions.
+
+- **Search:** `LiteratureSearchService.search(SearchQuery(...))` queries **OpenAlex** (primary) and **Semantic Scholar** (secondary) in parallel. It normalises both into one `Paper` model, then deduplicates and caps the results.
+  - Per call: ≤ 25 results per source, ≤ 3 pages, ≤ 40 combined.
+  - If one source fails, the result is marked degraded. Only if both fail does it raise `LiteratureUnavailable`.
+  - Both APIs are free. `OPENALEX_EMAIL`, `OPENALEX_API_KEY` and `SEMANTIC_SCHOLAR_API_KEY` are **optional free** credentials. Without a Semantic Scholar key, the shared public pool is often rate-limited (429). Keys never appear in URLs that get logged (log records drop query strings) or in errors.
+- **Dedupe and ranking:**
+  - `deduplicate()` matches by exact DOI, then provider IDs, then title + year + first-author surname (no fuzzy matching). Merged papers keep the provenance of every source.
+  - `rank_papers()` gives a transparent, deterministic score with per-signal breakdown: provider rank, citations, recency, open access and completeness.
+  - `filter_papers()` filters by year, abstract and open access.
+- **Documents:** `retrieve_document(paper, fetcher=SafePdfFetcher(client))` returns a `DocumentResult` with mode `full_text`, `abstract_only` or `unavailable`, plus a `failure_reason`.
+  - Only explicit **open-access PDF URLs** reported by the providers are fetched. Landing pages are never scraped, and paywalls or logins are never bypassed.
+  - Each download is validated:
+    - only http/https on the default ports, with no credentials in the URL
+    - public IPs only, re-checked on every redirect (≤ 3)
+    - no https → http downgrade
+    - a PDF content type and `%PDF-` signature
+    - **≤ 15 MB**, streamed, with a 30 s overall timeout
+  - PDFs are held in memory and never written to disk.
+  - pypdf extracts text page by page (≤ 40 pages). Scanned or text-less PDFs fall back to the abstract (there is no OCR).
+  - `DocumentResult.excerpt()` returns page-numbered text within about 16k characters (~4k tokens) and stops at the reference list.
+
+Tool tests use `httpx2.MockTransport` and local PDF fixtures (`backend/tests/fixtures/pdf/`), so they need no network or keys.
+
 ## Checks
 
-These are the same commands CI runs. Backend tests need `TEST_DATABASE_URL` (from `.env`) pointing at a database whose name ends in `_test`. The tests apply the migrations themselves and truncate the tables. They cover the contracts, the LLM layer, the trace recorder and its redaction, auth and credentials, all without network access to any LLM provider.
+These are the same commands CI runs. Backend tests need `TEST_DATABASE_URL` (from `.env`) pointing at a database whose name ends in `_test`. The tests apply the migrations themselves and truncate the tables. They cover the contracts, the LLM layer, the trace recorder and its redaction, the literature and PDF tools, and auth and credentials. None of them need network access to an LLM or literature provider.
+
+To run only the tool tests:
+
+```bash
+cd backend && uv run pytest tests/test_tools_literature_clients.py tests/test_tools_dedupe_ranking.py tests/test_tools_literature_search.py tests/test_tools_documents.py
+```
 
 ```bash
 cd backend && uv run ruff check . && uv run ruff format --check . && uv run mypy app tests migrations && uv run pytest

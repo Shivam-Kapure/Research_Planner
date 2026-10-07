@@ -1,0 +1,65 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [4 0 R 6 0 R 8 0 R 10 0 R] /Count 4 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+4 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R >>
+endobj
+5 0 obj
+<< /Length 464 >>
+stream
+BT /F1 11 Tf 14 TL 50 760 Td (Sleep Deprivation and Memory Consolidation in Adults) Tj T* (Abstract) Tj T* (We examined how one night of total sleep deprivation affects next-day recall) Tj T* (in a randomised crossover study of 40 healthy adults aged 18 to 35 years.) Tj T* (Introduction) Tj T* (Sleep is thought to support the consolidation of declarative memories, but) Tj T* (the size of the effect in adults remains debated across laboratory studies.) Tj T* ET
+endstream
+endobj
+6 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 7 0 R >>
+endobj
+7 0 obj
+<< /Length 302 >>
+stream
+BT /F1 11 Tf 14 TL 50 760 Td (Methods) Tj T* (Participants learned 60 word pairs in the evening and were tested the next) Tj T* (morning after either a normal night of sleep or a night of supervised waking.) Tj T* (Recall was scored blind to condition and analysed with a mixed effects model.) Tj T* ET
+endstream
+endobj
+8 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 9 0 R >>
+endobj
+9 0 obj
+<< /Length 395 >>
+stream
+BT /F1 11 Tf 14 TL 50 760 Td (Results) Tj T* (Recall was 20% lower after a night without sleep than after normal sleep.) Tj T* (The effect was larger for weakly encoded pairs than for strongly encoded ones,) Tj T* (suggesting that sleep preferentially stabilises fragile memory traces.) Tj T* (Discussion) Tj T* (These findings support an active role for sleep in memory consolidation.) Tj T* ET
+endstream
+endobj
+10 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 11 0 R >>
+endobj
+11 0 obj
+<< /Length 289 >>
+stream
+BT /F1 11 Tf 14 TL 50 760 Td (References) Tj T* (Smith J, Lee K. Sleep and memory: a review. Journal of Sleep Research. 2019.) Tj T* (Garcia M. Total sleep deprivation and recall. Neuropsychologia. 2021.) Tj T* (Chen W, Patel R. Encoding strength and consolidation. Memory. 2020.) Tj T* ET
+endstream
+endobj
+xref
+0 12
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000134 00000 n 
+0000000204 00000 n 
+0000000330 00000 n 
+0000000845 00000 n 
+0000000971 00000 n 
+0000001324 00000 n 
+0000001450 00000 n 
+0000001896 00000 n 
+0000002024 00000 n 
+trailer
+<< /Size 12 /Root 1 0 R >>
+startxref
+2365
+%%EOF
