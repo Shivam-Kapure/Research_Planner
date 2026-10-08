@@ -50,9 +50,57 @@ At least 4 distinct agents, clear responsibilities, planning/reasoning/tool use/
 
 ## Current Phase
 
-**Phase 8 complete: the frontend.** A Next.js research product on top of the unchanged Phase 7 API. No backend files were changed and no dependencies were added.
+**Phase 9: production deployment on free tiers.** The deployment is live and verified; the cold-start check is still outstanding (see Phase 9 Validation).
+- Frontend: https://researchpilot-rho.vercel.app (Vercel Hobby)
+- Backend: https://researchpilot-api-78oo.onrender.com (Render Free, Docker, Singapore)
+- Database: Neon Free PostgreSQL 17 (AWS ap-southeast-1, direct endpoint)
 
-**Next:** Phase 9, deployment (Vercel Hobby, Render Free, Neon Free).
+**Next:** Phase 10, final documentation and demo.
+
+## Phase 9: Deployment
+
+- **Architecture:**
+  - The browser talks only to Vercel. The Next.js rewrite proxies `/api/*` to Render (`BACKEND_URL`, read at build time), so the session cookie is first-party and no CORS is needed.
+  - Render runs the existing `backend/Dockerfile`, unchanged: Python 3.12, locked uv sync, non-root user, uvicorn bound to Render's `PORT`, one process. Render's health check path is `/healthz`.
+  - The backend connects to Neon over SSL.
+- **Configuration only:** no application code, dependency or schema changed for deployment.
+  - Render variables: `DATABASE_URL` (secret), `CREDENTIAL_ENCRYPTION_KEYS` (secret, a new production-only Fernet key), `ENVIRONMENT=production`, `SESSION_COOKIE_SECURE=true`, `FRONTEND_ORIGIN` (the exact Vercel domain), `GROQ_MODELS`, `GEMINI_MODELS`, `GROQ_REASONING_EFFORT=low`, `GEMINI_THINKING_LEVEL=low`.
+  - Vercel variables: `BACKEND_URL` only.
+  - No provider keys are set anywhere: users add their own in Settings.
+- **Neon connection string:** use the direct (non-pooled) endpoint and replace Neon's `?sslmode=require&channel_binding=require` with `?ssl=require`. SQLAlchemy passes both original parameters straight to asyncpg 0.32, which accepts neither, so connecting fails. The `-pooler` endpoint (transaction mode) does not suit asyncpg's prepared statements.
+- **Migrations:** Render Free has no pre-deploy command. Migrations are run from a developer machine with `DATABASE_URL` set only in that shell (from a hidden prompt) and `uv run alembic upgrade head`. Neon was migrated 0001 → 0002 → 0003 (head).
+- **Origins:** state-changing requests are accepted only from `FRONTEND_ORIGIN`, so Vercel preview deployments build but cannot sign in or save. This is intentional.
+- **Frontend fix found in production:** the landing headline used a non-breaking hyphen (U+2011) that is missing from the self-hosted font subset. It now uses a normal hyphen kept on one line with CSS (commit `2651c40`).
+
+## Phase 9 Validation (actually run, 2026-10-08)
+
+- **Health and proxy:**
+  - Render `/healthz` and `/readyz` return 200 (database ok), and Render's own health checks are green.
+  - Through Vercel, `/api/healthz` and `/api/readyz` return 200.
+  - Anonymous `/api/auth/me` and `/api/runs` return 401.
+- **Origin check:** a POST from the Vercel origin is accepted (it reaches validation: 422 on an empty body). A POST from a foreign origin gets 403, both directly and through the proxy.
+- **Authentication** (two throwaway test accounts with random addresses, through Vercel):
+  - register 201 → login 200 → `/me` 200
+  - cookie `rp_session` is `HttpOnly; Secure; SameSite=lax; Path=/`, with no `Domain`
+  - logout 204, after which the old cookie gets 401
+- **Isolation:** a second user gets 404 on the owner's real run (detail, events, outputs, result, cancel) and sees 0 runs; anonymous requests get 401.
+- **Real production run `9403b69c`** (the owner's account, the owner's free-tier Groq and Gemini keys entered in Settings and verified):
+  - Outcome `completed_with_limitations`, stop reason: iteration limit.
+  - Path: Planner → Search → Analysis → Synthesis (insufficient) → Replanning (search revision) → Search → Analysis → Synthesis (insufficient) → Replanning (search revision) → Search → Analysis → Synthesis (insufficient, limit reached) → Writer.
+  - 3/3 iterations, 41/60 LLM calls, 78k tokens.
+  - 15 papers, 15 documents (4 full text, 11 abstract only), 17 evidence items.
+  - The review has an abstract, 4 sections, `[Pn]` citations linked to 9 references with DOIs, and 5 stated limitations.
+- **Security:**
+  - gitleaks 8.30.1: git history clean (12 commits).
+  - Production JavaScript (16 chunks) and page HTML contain no Render or Neon URL, provider keys, database or encryption-key names, `BACKEND_URL`, storage APIs or the cookie name.
+  - HTTP redirects to HTTPS (308), and HSTS is enabled.
+- **Not yet verified:** the cold start after Render Free spin-down (about 15 min idle). The frontend's waking screen was verified locally in Phase 8, but not yet against production.
+
+## Known Limitations (production)
+
+- **Render Free sleeps after about 15 minutes without requests.** The first request then takes roughly 30–60 s, and the frontend shows its "waking the research engine" screen. A run whose tab is closed can be lost if the instance sleeps before the run finishes (it is then marked `failed: interrupted`).
+- **Deduplication** matches exact DOIs only. Versions and peer-review reports of the same paper (for example F1000Research v1/v2/review) have different DOIs and count as separate papers. Seen in run `9403b69c` (P3, P6, P8 and P9 are one study).
+- **Free-tier limits:** Groq's tokens-per-minute limit and Neon Free's compute limits apply. Model IDs in `GROQ_MODELS`/`GEMINI_MODELS` must be rechecked when providers retire models.
 
 ## Phase 8: What Was Added (`frontend/`)
 
@@ -402,5 +450,5 @@ Free tiers and free access only: Vercel Hobby, Render Free, Neon Free, free-tier
 6. ~~Agents, LangGraph orchestration and replanning~~ (complete)
 7. ~~Runs API, end-to-end tests and first real trace~~ (complete)
 8. ~~Frontend~~ (complete)
-9. Deployment
+9. ~~Deployment~~ (live; cold-start check outstanding)
 10. Final documentation and demo

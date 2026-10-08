@@ -4,7 +4,7 @@
 
 ResearchPilot turns a research question into a cited literature review. Five agents (Research Planner, Literature Search, Document Analysis, Evidence Synthesis, Review Writer) coordinate through a LangGraph state graph. The Evidence Synthesis Agent can send the run back for more research when the evidence is insufficient or contradictory, and the loop is bounded. Each run produces a real execution trace of the agent handoffs and decisions.
 
-> Status: **Phase 8 (frontend)**. The Next.js frontend covers sign-in, the research workspace, live agent timelines, reviews and settings (see PROJECT_STATE.md). The backend has auth, encrypted user keys, the five-agent LangGraph workflow with adaptive replanning, a Runs API with persisted runs, agent outputs and traces, and a first real free-tier run (exported in [docs/traces/](docs/traces/)). The frontend is Phase 8.
+> Status: **Phase 9 (deployed)**. Live at **https://researchpilot-rho.vercel.app**. The backend runs on Render Free (https://researchpilot-api-78oo.onrender.com) with Neon Free PostgreSQL. See PROJECT_STATE.md for what was verified.
 
 ## Stack
 
@@ -63,6 +63,24 @@ npm run dev
 `BACKEND_URL` is read when Next.js builds its rewrites, so on Vercel it must be set before the build.
 
 Remove the local database and its data with `docker compose down -v`.
+
+## Production deployment (free tiers)
+
+| Part | Service | Configuration |
+|---|---|---|
+| Frontend | Vercel Hobby, root directory `frontend` | `BACKEND_URL=https://<render-service>.onrender.com` (read at build time, so redeploy after changing it) |
+| Backend | Render Free web service, Docker, root `backend`, health check `/healthz` | `DATABASE_URL`, `CREDENTIAL_ENCRYPTION_KEYS` (a production-only key), `ENVIRONMENT=production`, `SESSION_COOKIE_SECURE=true`, `FRONTEND_ORIGIN=https://<vercel-domain>`, `GROQ_MODELS`, `GEMINI_MODELS`, `GROQ_REASONING_EFFORT`, `GEMINI_THINKING_LEVEL` |
+| Database | Neon Free PostgreSQL 17 | Use the direct endpoint, with the URL ending in `?ssl=require` (asyncpg does not accept Neon's `sslmode`/`channel_binding` parameters) |
+
+Secrets are entered only in the dashboards, never in the repository. Users add their own Groq/Gemini keys in the app's Settings page; no provider key is configured on Render or Vercel.
+
+Run migrations from your machine (Render Free has no pre-deploy step). PowerShell keeps the URL out of the screen and the history:
+
+```powershell
+$s = Read-Host "Neon DATABASE_URL" -AsSecureString; $env:DATABASE_URL = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($s)); cd backend; uv run alembic upgrade head; uv run alembic current; Remove-Item Env:DATABASE_URL; cd ..
+```
+
+Render Free sleeps when idle, so the first request after a pause takes up to about a minute; the frontend shows a waking screen meanwhile.
 
 ## API
 
