@@ -50,12 +50,42 @@ At least 4 distinct agents, clear responsibilities, planning/reasoning/tool use/
 
 ## Current Phase
 
-**Phase 9: production deployment on free tiers.** The deployment is live and verified; the cold-start check is still outstanding (see Phase 9 Validation).
+**Phase 10 complete. ResearchPilot is implemented, tested, deployed, documented and demo-ready.**
 - Frontend: https://researchpilot-rho.vercel.app (Vercel Hobby)
 - Backend: https://researchpilot-api-78oo.onrender.com (Render Free, Docker, Singapore)
 - Database: Neon Free PostgreSQL 17 (AWS ap-southeast-1, direct endpoint)
+- Final documentation:
+  - [docs/FINAL_ARCHITECTURE.md](docs/FINAL_ARCHITECTURE.md)
+  - [docs/CA3_EVIDENCE_INDEX.md](docs/CA3_EVIDENCE_INDEX.md)
+  - [docs/DEMO_GUIDE.md](docs/DEMO_GUIDE.md)
+  - [docs/DEMO_TALKING_POINTS.md](docs/DEMO_TALKING_POINTS.md)
+  - [docs/SCREENSHOT_CHECKLIST.md](docs/SCREENSHOT_CHECKLIST.md)
 
-**Next:** Phase 10, final documentation and demo.
+**Still manual:**
+- capture the screenshots listed in the checklist
+- verify the production cold start (see Phase 9 Validation)
+- optionally export the production run `9403b69c` (owner-only data)
+
+## Phase 10: Final Documentation and Evidence
+
+- **New docs:** FINAL_ARCHITECTURE (as built, including a Mermaid diagram and the differences from the Phase 1 design), DEMO_GUIDE, DEMO_TALKING_POINTS, CA3_EVIDENCE_INDEX and SCREENSHOT_CHECKLIST.
+- **Rewritten docs:** the README is now a submission-ready overview that links to the detailed docs. PHASE1_ARCHITECTURE is marked as the original design and points to the as-built document.
+- **Second real trace preserved:** run `d29bb92b` was started from the UI during the Phase 8 inspection, and its data already existed in the local database. It was exported unedited with the same API export as `34908068`, with no new LLM calls, to [`docs/traces/2026-10-07_run-d29bb92b.json`](docs/traces/2026-10-07_run-d29bb92b.json) (120 events).
+  - Path: Planner → Search → Analysis → Synthesis (insufficient) → Replanning (search revision) → Search → Analysis → Synthesis (**sufficient**) → Writer.
+  - Outcome `completed`; 2 iterations, 44 LLM calls, 70,931 tokens.
+  - 12 documents (3 full text, 9 abstract only), 14 evidence items.
+  - The review has 5 sections, 8 references and 2 limitations.
+- **No real LLM run was started in this phase.** No application code, schema or deployment change.
+
+## Phase 10 Validation (actually run, 2026-10-08)
+
+- **Backend:** `uv lock --check`, ruff check, ruff format --check, mypy (117 files) all pass; **pytest 388 passed** against real PostgreSQL 17.
+- **Frontend:** lint, typecheck, build and **`npm test`: 40 passed**.
+- **gitleaks 8.30.1:** git history (13 commits), `docs/` and all new and changed files are clean. A full-directory scan flags only git-ignored local files: `frontend/.next` build output, third-party packages in `backend/.venv`, and the local `.env`. None are tracked.
+- **Testing limitations (honest record):**
+  - **Playwright:** not installed. It would have been a new dependency.
+  - **Mutation checks:** in Phase 8, one mutation (polling that ignores the `after` cursor) was caught, but by the paging test never terminating rather than by a clean failure. The planned replan-parsing and key-masking mutations were not run. The backend mutation checks of Phases 3–7 are recorded in their sections.
+  - **Live updates:** the UI polls rather than streaming.
 
 ## Phase 9: Deployment
 
@@ -388,14 +418,13 @@ cd frontend && npm ci && npm run lint && npm run typecheck && npm run build
 
 ## Known Issues / Deferred
 
-- **Login rate limiting** (architecture §5, in-memory per IP and email) is not implemented yet; it is deferred to the Runs API hardening in Phase 7.
+- **Login rate limiting** (architecture §5, in-memory per IP and email) was not implemented. Argon2id hashing slows guessing, but there is no attempt limit.
 - **Expired sessions** are rejected but not deleted, so periodic cleanup is still to be added.
-- **Credential validation** against Groq/Gemini (status `valid`/`invalid`) is not done yet. It needs a live list-models call on save, so it is deferred to Phase 6/7, where the runner can also mark keys `invalid` on an `auth_failed` error. Keys are stored as `unverified`, and the gateway skips keys marked `invalid`.
-- **No default model IDs:** `GROQ_MODELS` and `GEMINI_MODELS` are empty by default because free-tier availability changes. Before Phase 6 runs, they must be set to models verified as free-tier with a real key.
-- **Tool calling** (`generate_with_tools` in architecture §6) is not implemented. It arrives with the Search Agent in Phase 6 if that agent needs native function calling.
+- **Credential validation:** resolved in Phase 7. Keys are checked with one model-list call on save, and a key the provider rejects during a run is marked `invalid`.
+- **No default model IDs:** `GROQ_MODELS` and `GEMINI_MODELS` are empty by default because free-tier availability changes. They are set per environment (the production values are in the README).
 - **Semantic Scholar without a key** is often rate-limited (seen in the live smoke test). Searches still work through OpenAlex, but a free S2 key is recommended for demos.
 - **SSRF DNS rebinding:** the DNS check and the connection are separate lookups, so a hostile DNS server could rebind between them. The fetcher blocks obvious SSRF but is not an egress firewall.
-- **Literature rate limiter:** `build_literature_service()` creates a new Semantic Scholar limiter per service. Phase 6/7 should build one service per process so that pacing is shared.
+- **Literature rate limiter:** resolved in Phase 7. The app builds one literature service per process, so Semantic Scholar pacing is shared.
 - **No per-round or per-run search budget** (6 search requests per round, 15 papers per run) is enforced in the tools; those bounds belong to the Phase 6 orchestrator. The tools enforce only per-call limits.
 - **Groq free-tier TPM:** Groq's tokens-per-minute limit (8K on gpt-oss) is the binding constraint for Document Analysis prompts (~4–5K tokens each, run two at a time). In the real run, 24 of 48 attempts were 429s, handled with `Retry-After` and fallbacks. Because rejected attempts count toward the 60-call budget, research stopped after iteration 2 (`budget_limit`). Recommendations: lower `GROQ_REQUESTS_PER_MINUTE`, prefer Gemini for analysis, or don't count 429-rejected attempts toward the budget (a deliberate design decision, left unchanged).
 - **Execution is not durable:** runs live in the API process. A restart fails queued and running runs (`interrupted`), and there is no queue by design (free tier).
@@ -407,7 +436,7 @@ cd frontend && npm ci && npm run lint && npm run typecheck && npm run build
 - **Budget:** the budget is checked before each LLM call and before each new iteration. A call already in progress can still add up to 6 provider requests (Phase 4 bound).
 - **Registration** returns 409 for an existing email. This reveals the account exists, which can't be avoided without email verification, and the project has no email service (free-tier constraint).
 - **Local ports:** on this development machine, 5432, 8000 and 3000 are used by other projects. Set `POSTGRES_PORT` and the URLs in `.env`, and pass `--port` to uvicorn and `-p` to Next.js.
-- **Neon:** the asyncpg `ssl`/pooler settings for Neon are configured in Phase 9 (deployment).
+- **Neon:** resolved in Phase 9. Use the direct endpoint with `?ssl=require` (see the README).
 
 ## Notes From Earlier Phases
 
@@ -450,5 +479,5 @@ Free tiers and free access only: Vercel Hobby, Render Free, Neon Free, free-tier
 6. ~~Agents, LangGraph orchestration and replanning~~ (complete)
 7. ~~Runs API, end-to-end tests and first real trace~~ (complete)
 8. ~~Frontend~~ (complete)
-9. ~~Deployment~~ (live; cold-start check outstanding)
-10. Final documentation and demo
+9. ~~Deployment~~ (live; production cold-start check still manual)
+10. ~~Final documentation and demo~~ (complete)

@@ -1,7 +1,6 @@
 # ResearchPilot: Phase 1 Architecture and Technology Selection
 
-Status: **Approved for implementation** (only the ownership split needs team input, see §18).
-Scope: architecture only. Nothing here has been implemented yet.
+Status: **Original design (Phase 1), now implemented.** The as-built system is described in [FINAL_ARCHITECTURE.md](FINAL_ARCHITECTURE.md); where the two differ (frontend libraries, test tooling, provider SDKs, the credentials table name, quote matching), FINAL_ARCHITECTURE §20 lists the differences, and the implementation is authoritative.
 **Hard constraint:** free tiers / free access only (see Cost Constraint).
 
 ---
