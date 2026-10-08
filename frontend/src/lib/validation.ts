@@ -74,8 +74,15 @@ export function toResearchRequest(form: ResearchForm) {
 }
 
 /** backend/app/schemas/api/credentials.py: CredentialIn (20–512 chars, no whitespace). */
-export function validateApiKey(value: string): string | null {
+export function validateApiKey(value: string, provider?: "groq" | "gemini"): string | null {
   const key = value.trim();
+  // Groq keys start with "gsk_"; catching a swap here saves a round trip that the provider rejects.
+  if (provider === "gemini" && key.startsWith("gsk_")) {
+    return "This looks like a Groq key (it starts with gsk_). Paste it into the Groq card instead.";
+  }
+  if (provider === "groq" && key && !key.startsWith("gsk_")) {
+    return "Groq keys start with gsk_. Check that this is not your Gemini key.";
+  }
   if (!key) return "Paste the API key from your provider's console.";
   if (/\s/.test(key)) return "API keys contain no spaces or line breaks.";
   if (key.length < 20) return "That looks too short to be an API key.";

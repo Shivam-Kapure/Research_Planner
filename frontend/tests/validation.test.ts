@@ -48,3 +48,13 @@ describe("API key input", () => {
     assert.equal(validateApiKey("  abcdefghijklmnopqrstuvwxyz  "), null);
   });
 });
+
+describe("provider key mix-ups", () => {
+  test("flags a Groq key pasted into Gemini, and a non-Groq key pasted into Groq", () => {
+    const groqLike = `gsk_${"a".repeat(52)}`;
+    assert.match(validateApiKey(groqLike, "gemini") ?? "", /Groq key/);
+    assert.equal(validateApiKey(groqLike, "groq"), null);
+    assert.match(validateApiKey("x".repeat(53), "groq") ?? "", /start with gsk_/);
+    assert.equal(validateApiKey("x".repeat(53), "gemini"), null);
+  });
+});

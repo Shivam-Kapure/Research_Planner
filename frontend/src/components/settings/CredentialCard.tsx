@@ -60,12 +60,12 @@ export function CredentialCard({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<"save" | "delete" | null>(null);
   const [confirming, setConfirming] = useState(false);
-  const [saved, setSaved] = useState<string | null>(null);
+  const [saved, setSaved] = useState<{ ok: boolean; text: string } | null>(null);
   const status = credential.status ? STATUS[credential.status] : null;
 
   async function save(event: FormEvent) {
     event.preventDefault();
-    const problem = validateApiKey(key);
+    const problem = validateApiKey(key, credential.provider);
     setError(problem);
     setSaved(null);
     if (problem) return;
@@ -76,10 +76,10 @@ export function CredentialCard({
       setEditing(false);
       setSaved(
         result.status === "valid"
-          ? "Saved and verified with the provider."
+          ? { ok: true, text: "Saved and verified with the provider." }
           : result.status === "invalid"
-            ? "Saved, but the provider rejected the key. Check it and try again."
-            : "Saved. The provider could not be reached to verify it.",
+            ? { ok: false, text: "Saved, but the provider rejected the key. Check it and try again." }
+            : { ok: true, text: "Saved. The provider could not be reached to verify it." },
       );
     } catch (e) {
       setError(errorMessage(e));
@@ -151,8 +151,8 @@ export function CredentialCard({
       )}
 
       {saved ? (
-        <p className="credential__saved" role="status">
-          {saved}
+        <p className={saved.ok ? "credential__saved" : "field__error"} role="status">
+          {saved.text}
         </p>
       ) : null}
 
