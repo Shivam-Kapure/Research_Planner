@@ -30,6 +30,7 @@
   letter-spacing: -0.035em;
 }
 .hero__title em {
+  white-space: nowrap; /* keep "evidence-backed" on one line */
   font-style: italic;
   font-weight: 300;
   color: var(--accent);

@@ -64,7 +64,7 @@ export default function LandingPage() {
         <section className="hero container" aria-labelledby="hero-title">
           <p className="eyebrow hero__eyebrow">Multi-agent literature review</p>
           <h1 id="hero-title" className="hero__title">
-            From research question to <em>evidence‑backed</em> review.
+            From research question to <em>evidence-backed</em> review.
           </h1>
           <div className="hero__foot">
             <p className="lede">
